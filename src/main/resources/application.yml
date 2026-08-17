@@ -1,0 +1,73 @@
+spring:
+  profiles:
+    active: dev,local
+  application:
+    name: student-agent
+
+  # MVC 异步请求超时（流式聊天）
+  mvc:
+    async:
+      request-timeout: 300000
+
+  # 文件上传大小限制（学习资料上传）
+  servlet:
+    multipart:
+      max-file-size: 2MB
+      max-request-size: 3MB
+
+  # 数据源配置
+  datasource:
+    url: jdbc:mysql://localhost:3306/student_agent?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
+    username: root
+    password: 123456
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  # Redis 配置
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+  # AI 配置（SiliconFlow 硅基流动，同时支持聊天和Embedding）
+  ai:
+    openai:
+      api-key: ${SILICONFLOW_API_KEY:}
+      base-url: https://api.siliconflow.cn
+      chat:
+        options:
+          model: deepseek-ai/DeepSeek-V3
+          max-tokens: 8192
+      embedding:
+        options:
+          model: Qwen/Qwen3-Embedding-0.6B
+
+    # Chroma 向量库配置
+    vectorstore:
+      chroma:
+        initialize-schema: true
+        client:
+          host: http://localhost
+          port: 8000
+        collection-name: student_memory
+
+# MyBatis 配置
+mybatis:
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: com.studentagent.studentagent.entity
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+
+# 日志级别：默认 INFO；需要排查 OpenAI 请求细节时临时改成 DEBUG
+logging:
+  level:
+    org.springframework.web.client.RestClient: INFO
+    org.springframework.ai.openai.api.OpenAiApi: INFO
+
+# 服务端口
+server:
+  port: 8080
+
+# Tavily 联网搜索配置（去 https://tavily.com 注册免费 Key）
+tavily:
+  api-key: ${TAVILY_API_KEY:}

@@ -1,0 +1,55 @@
+### 1. 注册
+POST http://localhost:8080/api/user/register
+Content-Type: application/json
+
+{
+  "username": "zhangsan",
+  "password": "123456"
+}
+
+### 2. 登录（成功后复制返回的 token）
+POST http://localhost:8080/api/user/login
+Content-Type: application/json
+
+{
+  "username": "zhangsan",
+  "password": "123456"
+}
+
+### 3. 退出登录（把引号里的 token 替换成上一步返回的值）
+POST http://localhost:8080/api/user/logout
+Authorization: Bearer 这里填登录返回的token
+
+### 4. 访问受保护接口（未登录应该返回 401）
+GET http://localhost:8080/api/sessions
+
+### 5. 访问受保护接口（带 token 应该返回 200）
+GET http://localhost:8080/api/sessions
+Authorization: Bearer 这里填登录返回的token
+
+### 6. 重复注册相同用户名（应返回 400 "用户名已存在"）
+POST http://localhost:8080/api/user/register
+Content-Type: application/json
+
+{
+  "username": "zhangsan",
+  "password": "654321"
+}
+
+### 7. 参数校验——空用户名（应返回 400）
+POST http://localhost:8080/api/user/register
+Content-Type: application/json
+
+{
+  "username": "",
+  "password": "123456"
+}
+
+### 8. 参数校验——密码太短（应返回 400）
+POST http://localhost:8080/api/user/register
+Content-Type: application/json
+
+{
+  "username": "lisi",
+  "password": "12"
+}
