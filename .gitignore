@@ -22,7 +22,6 @@ target/
 ### NetBeans ###
 /nbproject/private/
 /nbbuild/
-/dist/
 /nbdist/
 /.nb-gradle/
 build/
@@ -33,4 +32,25 @@ build/
 .vscode/
 
 ### 敏感配置（含 API Key，勿提交） ###
-src/main/resources/application-local.yml
+backend/src/main/resources/application-local.yml
+
+### 日志文件 ###
+*.log
+boot.log
+
+### 前端（Vue） ###
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
