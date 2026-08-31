@@ -8,8 +8,11 @@ import com.studentagent.studentagent.mapper.MemoryRecordMapper;
 import com.studentagent.studentagent.mapper.MessageMapper;
 import com.studentagent.studentagent.mapper.UserMapper;
 import com.studentagent.studentagent.mapper.WeeklyReportMapper;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
@@ -27,20 +30,20 @@ import java.util.Map;
 @Service
 public class ReportService {
 
-    private final ChatClient chatClient;
+    private final ChatModel chatModel;
     private final MessageMapper messageMapper;
     private final MemoryRecordMapper memoryRecordMapper;
     private final UserMapper userMapper;
     private final WeeklyReportMapper weeklyReportMapper;
     private final CalendarService calendarService;
 
-    public ReportService(@Qualifier("reportChatClient") ChatClient chatClient,
+    public ReportService(@Qualifier("reportChatModel") ChatModel chatModel,
                           MessageMapper messageMapper,
                           MemoryRecordMapper memoryRecordMapper,
                           UserMapper userMapper,
                           WeeklyReportMapper weeklyReportMapper,
                           CalendarService calendarService) {
-        this.chatClient = chatClient;
+        this.chatModel = chatModel;
         this.messageMapper = messageMapper;
         this.memoryRecordMapper = memoryRecordMapper;
         this.userMapper = userMapper;
@@ -169,11 +172,12 @@ public class ReportService {
         int maxRetries = 3;
         for (int i = 0; i < maxRetries; i++) {
             try {
-                content = chatClient.prompt()
-                        .system(WEEKLY_REPORT_PROMPT)
-                        .user(userPrompt)
-                        .call()
-                        .content();
+                content = chatModel.chat(ChatRequest.builder()
+                        .messages(List.of(
+                                SystemMessage.from(WEEKLY_REPORT_PROMPT),
+                                UserMessage.from(userPrompt)))
+                        .build())
+                        .aiMessage().text();
                 if (content != null && !content.isBlank()) {
                     content = content.trim();
                     break;

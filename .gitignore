@@ -54,3 +54,7 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+
+### 本机专属文件 ###
+backend/dev/
+backend/maven-settings-local.xml

@@ -1,13 +1,18 @@
 # 本地密钥配置模板：复制为 application-local.yml 并填入自己的 Key
-# application-local.yml 已被 .gitignore 忽略，不会提交到仓库
-spring:
-  ai:
-    openai:
+#   cp application-local.example.yml application-local.yml
+# application-local.yml 已被 .gitignore 忽略，不会提交到仓库。
+#
+# 注意：本项目 AI 配置走 LangChain4j（YAML 顶层 langchain4j.* 前缀），
+# 不是 spring.ai.*（那是旧版 Spring AI 的写法，放错位置会绑定失败并默认连 api.openai.com）。
+# base-url / model-name 等已在 application.yml 配好，这里只需覆盖 api-key。
+langchain4j:
+  open-ai:
+    chat-model:
       api-key: 在此填写SiliconFlow的Key
-    chroma:
-      client:
-        host: http://localhost
-        port: 8000
+    streaming-chat-model:
+      api-key: 在此填写SiliconFlow的Key
+    embedding-model:
+      api-key: 在此填写SiliconFlow的Key
 
 tavily:
   api-key: 在此填写Tavily的Key

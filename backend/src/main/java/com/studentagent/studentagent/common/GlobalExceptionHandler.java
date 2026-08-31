@@ -59,6 +59,7 @@ public class GlobalExceptionHandler {
             root = root.getCause();
         }
         log.error("根因: {} - {}", root.getClass().getName(), root.getMessage());
+        log.error("完整堆栈: ", e);
         return Result.fail("服务器内部错误");
     }
 }

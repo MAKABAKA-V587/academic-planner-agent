@@ -74,7 +74,8 @@ CREATE TABLE IF NOT EXISTS study_event (
     event_type  VARCHAR(20)  NOT NULL DEFAULT 'task'       COMMENT '事件类型: plan/exam/task',
     source      VARCHAR(20)  NOT NULL DEFAULT 'manual'     COMMENT '来源: ai/manual',
     color       VARCHAR(20)  DEFAULT '#409EFF'             COMMENT '事件颜色标记',
-    completed   TINYINT(1)   NOT NULL DEFAULT 0            COMMENT '是否完成(0=未完成 1=已完成)',
+    completed   TINYINT(1)   NOT NULL DEFAULT 0            COMMENT '是否完成(0=未完成 1=已完成，仅单日任务用)',
+    completed_dates TEXT       DEFAULT NULL                COMMENT '跨天任务按天打卡的完成日期，逗号分隔如 2026-08-31,2026-09-01',
     create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     INDEX idx_user_id (user_id),
     INDEX idx_event_date (event_date)

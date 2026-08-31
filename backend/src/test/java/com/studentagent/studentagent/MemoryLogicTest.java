@@ -5,11 +5,14 @@ import com.studentagent.studentagent.mapper.MemoryRecordMapper;
 import com.studentagent.studentagent.mapper.MessageMapper;
 import com.studentagent.studentagent.service.MemoryExtractService;
 import com.studentagent.studentagent.service.ProfileService;
+import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.embedding.EmbeddingModel;
+import dev.langchain4j.model.output.Response;
+import dev.langchain4j.store.embedding.EmbeddingStore;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.lang.reflect.Method;
@@ -18,7 +21,6 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 
 /**
@@ -71,7 +73,9 @@ class MemoryLogicTest {
     @DisplayName("完整流程：新掌握声明覆盖旧薄弱记忆（删除 MySQL + Chroma）")
     void processAndStoreOverridesOldMemory() throws Exception {
         MemoryRecordMapper mapper = Mockito.mock(MemoryRecordMapper.class);
-        VectorStore vectorStore = Mockito.mock(VectorStore.class);
+        EmbeddingStore<TextSegment> embeddingStore = Mockito.mock(EmbeddingStore.class);
+        EmbeddingModel embeddingModel = Mockito.mock(EmbeddingModel.class);
+        Mockito.when(embeddingModel.embedAll(Mockito.anyList())).thenReturn(Response.from(List.of()));
 
         MemoryRecord old = new MemoryRecord();
         old.setRecordId(100L);
@@ -79,12 +83,12 @@ class MemoryLogicTest {
         old.setMemoryText("薄弱科目-数学-数学比较薄弱");
         old.setVectorId("vec-100");
         Mockito.when(mapper.findByUserId(1L)).thenReturn(List.of(old));
-        Mockito.when(vectorStore.similaritySearch(any(org.springframework.ai.vectorstore.SearchRequest.class))).thenReturn(List.of());
 
         MemoryExtractService svc = new MemoryExtractService(
-                Mockito.mock(ChatClient.class),
+                Mockito.mock(ChatModel.class),
                 Mockito.mock(StringRedisTemplate.class),
-                vectorStore,
+                embeddingStore,
+                embeddingModel,
                 mapper,
                 Mockito.mock(MessageMapper.class),
                 Mockito.mock(ProfileService.class));
@@ -94,14 +98,16 @@ class MemoryLogicTest {
 
         assertEquals(1, count, "新记忆应被写入");
         Mockito.verify(mapper).deleteByIds(anyList());
-        Mockito.verify(vectorStore).delete(List.of("vec-100"));
+        Mockito.verify(embeddingStore).removeAll(List.of("vec-100"));
     }
 
     @Test
     @DisplayName("同向新记忆不会误删旧记忆")
     void processAndStoreKeepsSameDirection() throws Exception {
         MemoryRecordMapper mapper = Mockito.mock(MemoryRecordMapper.class);
-        VectorStore vectorStore = Mockito.mock(VectorStore.class);
+        EmbeddingStore<TextSegment> embeddingStore = Mockito.mock(EmbeddingStore.class);
+        EmbeddingModel embeddingModel = Mockito.mock(EmbeddingModel.class);
+        Mockito.when(embeddingModel.embedAll(Mockito.anyList())).thenReturn(Response.from(List.of()));
 
         MemoryRecord old = new MemoryRecord();
         old.setRecordId(100L);
@@ -109,12 +115,12 @@ class MemoryLogicTest {
         old.setMemoryText("薄弱科目-数学-数学比较薄弱");
         old.setVectorId("vec-100");
         Mockito.when(mapper.findByUserId(1L)).thenReturn(List.of(old));
-        Mockito.when(vectorStore.similaritySearch(any(org.springframework.ai.vectorstore.SearchRequest.class))).thenReturn(List.of());
 
         MemoryExtractService svc = new MemoryExtractService(
-                Mockito.mock(ChatClient.class),
+                Mockito.mock(ChatModel.class),
                 Mockito.mock(StringRedisTemplate.class),
-                vectorStore,
+                embeddingStore,
+                embeddingModel,
                 mapper,
                 Mockito.mock(MessageMapper.class),
                 Mockito.mock(ProfileService.class));

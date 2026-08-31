@@ -3,10 +3,9 @@ package com.studentagent.studentagent.tool;
 import com.studentagent.studentagent.entity.ChatMessage;
 import com.studentagent.studentagent.mapper.MessageMapper;
 import com.studentagent.studentagent.service.CalendarService;
+import dev.langchain4j.agent.tool.P;
+import dev.langchain4j.agent.tool.Tool;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.model.ToolContext;
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
@@ -55,17 +54,16 @@ public class LearningPlanTool {
     /** 模板格式变体数：随机切换避免每次回复千篇一律 */
     private static final int TEMPLATE_VARIANTS = 5;
 
-    @Tool(description = "根据科目、考试时间和薄弱知识点，生成包含基础阶段、强化阶段和冲刺阶段的结构化学习计划")
+    @Tool("根据科目、考试时间和薄弱知识点，生成包含基础阶段、强化阶段和冲刺阶段的结构化学习计划")
     public String generateStudyPlan(
-            @ToolParam(description = "科目名称，如高等数学、数据结构、考研英语等") String subject,
-            @ToolParam(description = "考试时间，格式 yyyy-MM，如 2025-12") String examTime,
-            @ToolParam(description = "薄弱知识点描述，如线性代数、二叉树、阅读理解的掌握程度较弱") String weakPoints,
-            ToolContext toolContext) {
+            @P("科目名称，如高等数学、数据结构、考研英语等") String subject,
+            @P("考试时间，格式 yyyy-MM，如 2025-12") String examTime,
+            @P("薄弱知识点描述，如线性代数、二叉树、阅读理解的掌握程度较弱") String weakPoints) {
 
         log.info("[工具调用] generateStudyPlan: subject={}, examTime={}, weakPoints={}", subject, examTime, weakPoints);
 
         // 保存工具调用消息
-        saveToolMessage("tool_call", "generateStudyPlan", subject, examTime, weakPoints, toolContext);
+        saveToolMessage("tool_call", "generateStudyPlan", subject, examTime, weakPoints);
 
         String result;
         // 优先模板（秒回），LLM 兜底（仅模板生成失败时使用）
@@ -77,10 +75,10 @@ public class LearningPlanTool {
         }
 
         // 保存工具返回结果
-        saveToolMessage("tool_result", result, subject, examTime, weakPoints, toolContext);
+        saveToolMessage("tool_result", result, subject, examTime, weakPoints);
 
         // 自动从计划中提取日期段，创建日历事件
-        autoExtractCalendarEvents(result, toolContext);
+        autoExtractCalendarEvents(result);
 
         return result;
     }
@@ -242,10 +240,9 @@ public class LearningPlanTool {
     /**
      * 保存工具调用/返回消息到 chat_message 表
      */
-    private void saveToolMessage(String role, String content, String subject, String examTime, String weakPoints,
-                                 ToolContext toolContext) {
+    private void saveToolMessage(String role, String content, String subject, String examTime, String weakPoints) {
         try {
-            Long sessionId = ToolContextHolder.sessionId(toolContext);
+            Long sessionId = ToolContextHolder.sessionId();
             if (sessionId == null) return;
 
             ChatMessage msg = new ChatMessage();
@@ -264,9 +261,9 @@ public class LearningPlanTool {
      * 从学习计划文本中自动提取日期段，创建日历事件。
      * 失败不影响主流程。
      */
-    private void autoExtractCalendarEvents(String planText, ToolContext toolContext) {
+    private void autoExtractCalendarEvents(String planText) {
         try {
-            Long userId = ToolContextHolder.userId(toolContext);
+            Long userId = ToolContextHolder.userId();
             if (userId == null) {
                 log.warn("无法获取用户上下文，跳过日历自动提取");
                 return;

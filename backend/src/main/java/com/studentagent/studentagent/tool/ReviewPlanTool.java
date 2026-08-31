@@ -5,10 +5,9 @@ import com.studentagent.studentagent.entity.StudyEvent;
 import com.studentagent.studentagent.mapper.MessageMapper;
 import com.studentagent.studentagent.mapper.StudyEventMapper;
 import com.studentagent.studentagent.service.CalendarService;
+import dev.langchain4j.agent.tool.P;
+import dev.langchain4j.agent.tool.Tool;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.model.ToolContext;
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
@@ -37,14 +36,13 @@ public class ReviewPlanTool {
         this.studyEventMapper = studyEventMapper;
     }
 
-    @Tool(description = "根据学过的知识点按艾宾浩斯遗忘曲线自动生成复习计划，并按当天/1天后/2天后/4天后/7天后/15天后自动创建日历复习事件")
+    @Tool("根据学过的知识点按艾宾浩斯遗忘曲线自动生成复习计划，并按当天/1天后/2天后/4天后/7天后/15天后自动创建日历复习事件")
     public String scheduleReviewPlan(
-            @ToolParam(description = "科目名称，如高等数学、考研英语、数据结构") String subject,
-            @ToolParam(description = "本次学过的知识点，用顿号或逗号分隔，如：微分方程、泰勒公式、格林公式") String knowledgePoints,
-            ToolContext toolContext) {
+            @P("科目名称，如高等数学、考研英语、数据结构") String subject,
+            @P("本次学过的知识点，用顿号或逗号分隔，如：微分方程、泰勒公式、格林公式") String knowledgePoints) {
 
-        Long sessionId = ToolContextHolder.sessionId(toolContext);
-        Long userId = ToolContextHolder.userId(toolContext);
+        Long sessionId = ToolContextHolder.sessionId();
+        Long userId = ToolContextHolder.userId();
         log.info("[工具调用] scheduleReviewPlan: subject={}, knowledgePoints={}", subject, knowledgePoints);
 
         // 保存工具调用消息

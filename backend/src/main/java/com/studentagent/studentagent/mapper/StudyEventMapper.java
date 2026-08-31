@@ -88,6 +88,10 @@ public interface StudyEventMapper {
     @Update("UPDATE study_event SET completed = #{completed} WHERE event_id = #{eventId}")
     int updateCompleted(@Param("eventId") Long eventId, @Param("completed") Boolean completed);
 
+    /** 更新跨天任务的按天打卡记录（逗号分隔日期串，null=清空全部打卡） */
+    @Update("UPDATE study_event SET completed_dates = #{completedDates} WHERE event_id = #{eventId}")
+    int updateCompletedDates(@Param("eventId") Long eventId, @Param("completedDates") String completedDates);
+
     /** 查询用户最近完成的 N 个任务（按日期倒序） */
     @Select("SELECT * FROM study_event WHERE user_id = #{userId} AND completed = 1 " +
             "ORDER BY event_date DESC, create_time DESC LIMIT #{limit}")

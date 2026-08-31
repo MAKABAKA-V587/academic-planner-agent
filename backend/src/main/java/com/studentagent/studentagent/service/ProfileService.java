@@ -8,12 +8,21 @@ import com.studentagent.studentagent.entity.StudentProfile;
 import com.studentagent.studentagent.mapper.MemoryRecordMapper;
 import com.studentagent.studentagent.mapper.ProfileMapper;
 import com.studentagent.studentagent.mapper.UserMapper;
+import dev.langchain4j.data.document.Metadata;
+import dev.langchain4j.data.embedding.Embedding;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.embedding.EmbeddingModel;
+import dev.langchain4j.store.embedding.EmbeddingMatch;
+import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
+import dev.langchain4j.store.embedding.EmbeddingStore;
+import dev.langchain4j.store.embedding.filter.Filter;
+import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.document.Document;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
@@ -37,10 +46,11 @@ import java.util.stream.Collectors;
 public class ProfileService {
 
     private final ProfileMapper profileMapper;
-    private final VectorStore vectorStore;
+    private final EmbeddingStore<TextSegment> embeddingStore;
+    private final EmbeddingModel embeddingModel;
     private final MemoryRecordMapper memoryRecordMapper;
     private final UserMapper userMapper;
-    private final ChatClient chatClient;
+    private final ChatModel chatModel;
     private final StringRedisTemplate redisTemplate;
 
     private static final String TAG_LOCK_PREFIX = "tag:generate:";
@@ -142,20 +152,23 @@ public class ProfileService {
                 return;
             }
 
-            // 3. 逐条写入 Chroma + MySQL
+            // 3. 逐条写入 Chroma + MySQL（addAll 带自定义 docId，保证 vector_id 可溯源）
+            List<String> ids = new ArrayList<>();
+            List<TextSegment> segments = new ArrayList<>();
             for (String memoryText : memoryTexts) {
                 String docId = UUID.randomUUID().toString();
-                Document doc = Document.builder()
-                        .id(docId)
-                        .text(memoryText)
-                        .metadata(Map.of("userId", String.valueOf(userId), "type", "profile"))
-                        .build();
-                vectorStore.add(List.of(doc));
+                ids.add(docId);
+                segments.add(TextSegment.from(memoryText, Metadata.from(Map.of(
+                        "userId", String.valueOf(userId), "type", "profile"))));
+            }
+            List<Embedding> embeddings = embeddingModel.embedAll(segments).content();
+            embeddingStore.addAll(ids, embeddings, segments);
 
+            for (int i = 0; i < memoryTexts.size(); i++) {
                 MemoryRecord record = new MemoryRecord();
                 record.setUserId(userId);
-                record.setMemoryText(memoryText);
-                record.setVectorId(docId);
+                record.setMemoryText(memoryTexts.get(i));
+                record.setVectorId(ids.get(i));
                 memoryRecordMapper.insert(record);
             }
             log.info("用户{}档案记忆同步完成，写入{}条", userId, memoryTexts.size());
@@ -170,16 +183,23 @@ public class ProfileService {
      */
     private void deleteOldProfileDocs(Long userId) {
         try {
-            List<Document> oldDocs = vectorStore.similaritySearch(
-                    SearchRequest.builder()
-                            .query("学习档案")
-                            .topK(50)
-                            .filterExpression("userId == '" + userId + "' && type == 'profile'")
-                            .build()
-            );
-            if (!oldDocs.isEmpty()) {
-                List<String> docIds = oldDocs.stream().map(Document::getId).collect(Collectors.toList());
-                vectorStore.delete(docIds);
+            Embedding queryEmbedding = embeddingModel.embed("学习档案").content();
+            Filter filter = Filter.and(
+                    MetadataFilterBuilder.metadataKey("userId").isEqualTo(String.valueOf(userId)),
+                    MetadataFilterBuilder.metadataKey("type").isEqualTo("profile"));
+            List<EmbeddingMatch<TextSegment>> matches = embeddingStore.search(
+                            EmbeddingSearchRequest.builder()
+                                    .queryEmbedding(queryEmbedding)
+                                    .maxResults(50)
+                                    .filter(filter)
+                                    .build())
+                    .matches();
+            if (!matches.isEmpty()) {
+                List<String> docIds = matches.stream()
+                        .map(EmbeddingMatch::embeddingId)
+                        .filter(java.util.Objects::nonNull)
+                        .collect(Collectors.toList());
+                embeddingStore.removeAll(docIds);
                 // 同步删除 MySQL 中对应记录
                 for (String docId : docIds) {
                     memoryRecordMapper.deleteByVectorId(docId);
@@ -272,11 +292,12 @@ public class ProfileService {
             }
 
             String memoryInput = String.join("\n", allMemories);
-            String result = chatClient.prompt()
-                    .system(TAG_GENERATE_PROMPT)
-                    .user(memoryInput)
-                    .call()
-                    .content();
+            String result = chatModel.chat(ChatRequest.builder()
+                    .messages(List.of(
+                            SystemMessage.from(TAG_GENERATE_PROMPT),
+                            UserMessage.from(memoryInput)))
+                    .build())
+                    .aiMessage().text();
 
             if (result != null && !result.isBlank()) {
                 // 新格式：标签名|权重，每行一个。存为 标签1|5,标签2|3

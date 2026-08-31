@@ -4,10 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.studentagent.studentagent.entity.ChatMessage;
 import com.studentagent.studentagent.mapper.MessageMapper;
+import dev.langchain4j.agent.tool.P;
+import dev.langchain4j.agent.tool.Tool;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.model.ToolContext;
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -45,34 +44,33 @@ public class WebSearchTool {
                 .build();
     }
 
-    @Tool(description = "搜索互联网获取最新的学习资料、技术文章、考试信息等。当本地知识库无法回答用户关于具体知识点、最新资讯、考试政策、题目解析等问题时使用")
+    @Tool("搜索互联网获取最新的学习资料、技术文章、考试信息等。当本地知识库无法回答用户关于具体知识点、最新资讯、考试政策、题目解析等问题时使用")
     public String webSearch(
-            @ToolParam(description = "搜索关键词或问题，如 '2025考研政治大纲变化' 'Java HashMap底层实现原理' '蓝桥杯真题解析' 等") String query,
-            ToolContext toolContext) {
+            @P("搜索关键词或问题，如 '2025考研政治大纲变化' 'Java HashMap底层实现原理' '蓝桥杯真题解析' 等") String query) {
 
         log.info("[工具调用] webSearch: query={}", query);
 
-        // 联网开关从 ToolContext 读取（流式端点工具在订阅线程执行，ThreadLocal 开关会丢失）
-        if (!ToolContextHolder.webSearchEnabled(toolContext)) {
+        // 联网开关从 ThreadLocal 读取（阻塞调用同一线程执行工具，不会丢失）
+        if (!ToolContextHolder.webSearchEnabled()) {
             return "联网搜索功能已关闭。如需开启，请点击输入框旁的联网开关。";
         }
 
-        saveToolMessage("tool_call", "正在搜索: " + query, toolContext);
+        saveToolMessage("tool_call", "正在搜索: " + query);
 
         if (apiKey == null || apiKey.isBlank()) {
             String msg = "联网搜索未配置 Tavily API Key，请先申请免费 Key 并配置到 application.yml 的 tavily.api-key";
-            saveToolMessage("tool_result", msg, toolContext);
+            saveToolMessage("tool_result", msg);
             return msg;
         }
 
         try {
             String result = doSearch(query);
-            saveToolMessage("tool_result", result, toolContext);
+            saveToolMessage("tool_result", result);
             return result;
         } catch (Exception e) {
             log.error("Tavily 搜索失败: {}", e.getMessage());
             String fallback = "联网搜索暂时不可用（" + e.getMessage() + "），建议稍后重试或换个关键词。";
-            saveToolMessage("tool_result", fallback, toolContext);
+            saveToolMessage("tool_result", fallback);
             return fallback;
         }
     }
@@ -134,9 +132,9 @@ public class WebSearchTool {
         return sb.toString();
     }
 
-    private void saveToolMessage(String role, String content, ToolContext toolContext) {
+    private void saveToolMessage(String role, String content) {
         try {
-            Long sessionId = ToolContextHolder.sessionId(toolContext);
+            Long sessionId = ToolContextHolder.sessionId();
             if (sessionId == null) return;
 
             ChatMessage msg = new ChatMessage();

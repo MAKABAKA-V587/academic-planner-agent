@@ -2,13 +2,17 @@ package com.studentagent.studentagent.tool;
 
 import com.studentagent.studentagent.entity.ChatMessage;
 import com.studentagent.studentagent.mapper.MessageMapper;
+import dev.langchain4j.agent.tool.P;
+import dev.langchain4j.agent.tool.Tool;
+import dev.langchain4j.data.embedding.Embedding;
+import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.model.embedding.EmbeddingModel;
+import dev.langchain4j.store.embedding.EmbeddingMatch;
+import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
+import dev.langchain4j.store.embedding.EmbeddingStore;
+import dev.langchain4j.store.embedding.filter.Filter;
+import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.model.ToolContext;
-import org.springframework.ai.document.Document;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
-import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
@@ -53,31 +57,33 @@ public class KnowledgeRetrievalTool {
 
     private final MessageMapper messageMapper;
     private final KnowledgeBaseLoader knowledgeBaseLoader;
-    private final VectorStore vectorStore;
+    private final EmbeddingStore<TextSegment> embeddingStore;
+    private final EmbeddingModel embeddingModel;
 
     public KnowledgeRetrievalTool(MessageMapper messageMapper,
                                    KnowledgeBaseLoader knowledgeBaseLoader,
-                                   VectorStore vectorStore) {
+                                   EmbeddingStore<TextSegment> embeddingStore,
+                                   EmbeddingModel embeddingModel) {
         this.messageMapper = messageMapper;
         this.knowledgeBaseLoader = knowledgeBaseLoader;
-        this.vectorStore = vectorStore;
+        this.embeddingStore = embeddingStore;
+        this.embeddingModel = embeddingModel;
     }
 
-    @Tool(description = "根据科目和知识点关键词查询专业课程学习指引，返回核心概念、学习重点和常见考点的结构化内容")
+    @Tool("根据科目和知识点关键词查询专业课程学习指引，返回核心概念、学习重点和常见考点的结构化内容")
     public String searchKnowledge(
-            @ToolParam(description = "科目名称，如数据结构、操作系统、计算机网络、高等数学、线性代数等") String subject,
-            @ToolParam(description = "知识点关键词，如链表、死锁、TCP、导数、矩阵等") String keyword,
-            ToolContext toolContext) {
+            @P("科目名称，如数据结构、操作系统、计算机网络、高等数学、线性代数等") String subject,
+            @P("知识点关键词，如链表、死锁、TCP、导数、矩阵等") String keyword) {
 
         log.info("[工具调用] searchKnowledge: subject={}, keyword={}", subject, keyword);
 
         // 保存工具调用消息到 DB
-        saveToolMessage("tool_call", "searchKnowledge", subject, keyword, toolContext);
+        saveToolMessage("tool_call", "searchKnowledge", subject, keyword);
 
         String result = doSearch(subject, keyword);
 
         // 保存工具返回结果
-        saveToolMessage("tool_result", result, subject, keyword, toolContext);
+        saveToolMessage("tool_result", result, subject, keyword);
 
         return result;
     }
@@ -116,32 +122,35 @@ public class KnowledgeRetrievalTool {
         try {
             String query = (normalizedSubject != null ? normalizedSubject : "")
                     + " " + (keyword != null ? keyword : "");
-            List<Document> results = CompletableFuture.supplyAsync(() -> {
+            List<EmbeddingMatch<TextSegment>> results = CompletableFuture.supplyAsync(() -> {
                 try {
-                    return vectorStore.similaritySearch(
-                            SearchRequest.builder()
-                                    .query(query.trim())
-                                    .topK(3)
-                                    .filterExpression("type == 'knowledge'")
-                                    .build()
-                    );
+                    Embedding queryEmbedding = embeddingModel.embed(query.trim()).content();
+                    Filter filter = MetadataFilterBuilder.metadataKey("type").isEqualTo("knowledge");
+                    return embeddingStore.search(EmbeddingSearchRequest.builder()
+                                    .queryEmbedding(queryEmbedding)
+                                    .maxResults(3)
+                                    .filter(filter)
+                                    .build())
+                            .matches();
                 } catch (Exception e) {
                     log.warn("向量检索失败: {}", e.getMessage());
-                    return List.<Document>of();
+                    return List.<EmbeddingMatch<TextSegment>>of();
                 }
             }).get(3, TimeUnit.SECONDS);
 
-            if (!results.isEmpty() && results.get(0).getScore() != null && results.get(0).getScore() >= 0.5) {
-                Document best = results.get(0);
-                String bestSubject = best.getMetadata() != null ? (String) best.getMetadata().get("subject") : null;
-                String bestTopic = best.getMetadata() != null ? (String) best.getMetadata().get("topic") : null;
+            if (!results.isEmpty() && results.get(0).score() != null && results.get(0).score() >= 0.5) {
+                EmbeddingMatch<TextSegment> best = results.get(0);
+                TextSegment segment = best.embedded();
+                String bestSubject = segment != null ? segment.metadata().getString("subject") : null;
+                String bestTopic = segment != null ? segment.metadata().getString("topic") : null;
                 String prefix = (bestSubject != null && bestTopic != null)
                         ? "【" + bestSubject + " - " + bestTopic + "】\n"
                         : "";
-                log.info("向量检索命中: {} - {}, score={}", bestSubject, bestTopic, best.getScore());
+                log.info("向量检索命中: {} - {}, score={}", bestSubject, bestTopic, best.score());
                 String sourceName = (bestSubject != null ? bestSubject : "知识库")
                         + (bestTopic != null ? " - " + bestTopic : "");
-                return prefix + best.getText() + "\n\n【知识来源】本地知识库「" + sourceName + "」";
+                String text = segment != null ? segment.text() : "";
+                return prefix + text + "\n\n【知识来源】本地知识库「" + sourceName + "」";
             }
         } catch (Exception e) {
             log.warn("向量检索超时或失败，跳过: {}", e.getMessage());
@@ -237,9 +246,9 @@ public class KnowledgeRetrievalTool {
     /**
      * 保存工具调用/返回消息到 chat_message 表
      */
-    private void saveToolMessage(String role, String content, String subject, String keyword, ToolContext toolContext) {
+    private void saveToolMessage(String role, String content, String subject, String keyword) {
         try {
-            Long sessionId = ToolContextHolder.sessionId(toolContext);
+            Long sessionId = ToolContextHolder.sessionId();
             if (sessionId == null) return;
 
             ChatMessage msg = new ChatMessage();

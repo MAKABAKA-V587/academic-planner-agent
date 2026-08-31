@@ -20,5 +20,7 @@ public class StudyEvent {
     private String source;
     private String color;
     private Boolean completed;
+    /** 跨天任务按天打卡的完成日期（逗号分隔，如 "2026-08-31,2026-09-01"），单日任务为 null */
+    private String completedDates;
     private LocalDateTime createTime;
 }

@@ -4,9 +4,12 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.studentagent.studentagent.entity.StudyEvent;
 import com.studentagent.studentagent.mapper.StudyEventMapper;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Async;
@@ -40,7 +43,7 @@ public class CalendarService {
     private MemoryExtractService memoryExtractService;
     @Lazy
     @Autowired
-    private ChatClient chatClient;
+    private ChatModel chatModel;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     private static final String EVENT_EXTRACT_PROMPT = """
@@ -318,7 +321,10 @@ public class CalendarService {
 
             // 10秒超时，AI 仅兜底用，避免长时间阻塞导入
             String result = CompletableFuture.supplyAsync(() ->
-                    chatClient.prompt().system(prompt).user(userText).call().content()
+                    chatModel.chat(ChatRequest.builder()
+                            .messages(List.of(SystemMessage.from(prompt), UserMessage.from(userText)))
+                            .build())
+                            .aiMessage().text()
             ).get(10, TimeUnit.SECONDS);
 
             if (result == null || result.isBlank()) return Collections.emptyList();
@@ -1371,6 +1377,24 @@ public class CalendarService {
         if (existing == null || !existing.getUserId().equals(userId)) {
             throw new RuntimeException("事件不存在或无权限");
         }
+        if (existing.getEndDate() != null) {
+            // 跨天任务：按天打卡，勾选只影响当天，不牵连其他日期（修复反馈47：划掉今日任务导致长期任务全被标记完成）
+            LocalDate today = LocalDate.now();
+            Set<String> dates = parseCompletedDates(existing.getCompletedDates());
+            if (Boolean.TRUE.equals(completed)) {
+                dates.add(today.toString());
+            } else {
+                dates.remove(today.toString());
+            }
+            studyEventMapper.updateCompletedDates(eventId, dates.isEmpty() ? null : String.join(",", dates));
+            // 记忆联动带当天日期：不同日期打卡/取消互不影响
+            if (Boolean.TRUE.equals(completed)) {
+                memoryExtractService.recordCompletion(userId, existing.getTitle(), today);
+            } else {
+                memoryExtractService.removeCompletion(userId, existing.getTitle(), today);
+            }
+            return;
+        }
         studyEventMapper.updateCompleted(eventId, completed);
         // 记忆联动带上任务日期：不同日期的同名任务勾选/取消互不影响
         if (Boolean.TRUE.equals(completed)) {
@@ -1378,6 +1402,15 @@ public class CalendarService {
         } else {
             memoryExtractService.removeCompletion(userId, existing.getTitle(), existing.getEventDate());
         }
+    }
+
+    /** 解析打卡日期串为有序去重集合（TreeSet 保证按日期排序且去重） */
+    private Set<String> parseCompletedDates(String raw) {
+        Set<String> dates = new TreeSet<>();
+        if (raw != null && !raw.isBlank()) {
+            Collections.addAll(dates, raw.split(","));
+        }
+        return dates;
     }
 
     private StudyEvent buildEvent(Long userId, String title, LocalDate start, LocalDate end,

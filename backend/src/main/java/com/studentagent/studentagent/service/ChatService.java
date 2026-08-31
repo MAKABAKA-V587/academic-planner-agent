@@ -2,7 +2,6 @@ package com.studentagent.studentagent.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.studentagent.studentagent.entity.ChatMessage;
 import com.studentagent.studentagent.entity.ChatSessionMaterial;
 import com.studentagent.studentagent.entity.MemoryRecord;
 import com.studentagent.studentagent.entity.StudentProfile;
@@ -15,22 +14,42 @@ import com.studentagent.studentagent.mapper.ProfileMapper;
 import com.studentagent.studentagent.mapper.SessionMapper;
 import com.studentagent.studentagent.mapper.StudyMaterialMapper;
 import com.studentagent.studentagent.mapper.UserMapper;
+import com.studentagent.studentagent.service.router.ChatRoute;
+import com.studentagent.studentagent.service.router.ChatRouter;
+import com.studentagent.studentagent.service.router.RouteDecision;
+import com.studentagent.studentagent.service.review.ToolResultReviewAgent;
+import com.studentagent.studentagent.tool.ToolCallExecutor;
 import com.studentagent.studentagent.tool.ToolContextHolder;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.agent.tool.ToolSpecification;
+import dev.langchain4j.data.embedding.Embedding;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.StreamingChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.PartialResponse;
+import dev.langchain4j.model.chat.response.PartialResponseContext;
+import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.embedding.EmbeddingModel;
+import dev.langchain4j.store.embedding.EmbeddingMatch;
+import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
+import dev.langchain4j.store.embedding.EmbeddingStore;
+import dev.langchain4j.store.embedding.filter.Filter;
+import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.document.Document;
-import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.web.multipart.MultipartFile;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.FluxSink;
+import reactor.core.publisher.Mono;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -53,14 +72,18 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class ChatService {
 
-    private final ChatClient chatClient;
-    private final ChatClient streamChatClient;
+    private final ChatModel chatModel;
+    private final StreamingChatModel streamingChatModel;
     private final CalendarService calendarService;
     private final StringRedisTemplate redisTemplate;
     private final MessageMapper messageMapper;
     private final SessionMapper sessionMapper;
     private final ProfileMapper profileMapper;
-    private final VectorStore vectorStore;
+    private final EmbeddingStore<TextSegment> embeddingStore;
+    private final EmbeddingModel embeddingModel;
+    private final ToolCallExecutor toolCallExecutor;
+    private final ChatRouter chatRouter;
+    private final ToolResultReviewAgent reviewAgent;
     private final ObjectMapper objectMapper;
     private final MemoryExtractService memoryExtractService;
     private final ProfileService profileService;
@@ -75,6 +98,7 @@ public class ChatService {
     private static final double RECALL_THRESHOLD = 0.7;
     private static final int RECALL_TOP_K = 3;
     private static final int MAX_OUTPUT_TOKENS = 8192;
+    private static final int MAX_TOOL_ROUNDS = 6;
 
     /** 核心回答规范：阻塞/流式共用 */
     private static final String CORE_RULES = """
@@ -118,6 +142,9 @@ public class ChatService {
                （generateStudyPlan / addEvent / queryEvents）获取真实结果，再基于工具返回组织回答。
                生成学习计划必须调用 generateStudyPlan 工具（工具会自动创建日历事件并返回完整计划），
                你只需基于工具返回展示计划，禁止自行编造完整计划文本。
+            1.1 用户请求"添加/安排单个任务或事件"（如"今天加一个运动任务""明天下午3点背单词"）时，
+               必须直接调用 addEvent 创建，调用成功后简短确认即可（如"已添加：运动任务（2026-08-17）"），
+               禁止再输出表格、建议清单或"请稍等/我来处理"等过程台词；不要先给运动建议再询问，直接添加。
             2. 严禁输出导入"过程/结果"叙事：不得写"我现在将调用日历工具…请稍候…工具调用中…
                ✅日历导入完成！所有事件已从X至Y添加到你的日历"这类台词。日历事件只能通过真实工具调用
                产生；只有当你确实调用了工具并收到返回结果时，才能提及导入结果。
@@ -149,6 +176,7 @@ public class ChatService {
             
             【生成计划/日程时】日期必须写绝对日期（yyyy-MM-dd 或 8月5日），禁止只写"第X-Y周""D1""下周"这类相对格式；
             用户没给开始日期时，默认从今天（见下方日期参考）开始推算。表格统一为 | 日期 | 标题 | 类型 |，日期列用 yyyy-MM-dd。
+            （此表格格式仅适用于 generateStudyPlan 输出的完整计划；addEvent 添加单个事件时无需输出表格。）
             
             规则：用户问"今天能干什么/有什么推荐/帮我安排"时，先调 queryEvents 查日历。
             有任务则列出，无任务则结合用户学习特征主动推荐，禁止只说"没有安排"。
@@ -166,9 +194,21 @@ public class ChatService {
             """;
 
     private static final String WEBSEARCH_HINT = """
-            
             【联网搜索已启用】当前你可以使用 webSearch 工具搜索互联网获取最新信息。
             遇到需要实时数据的问题（如金价、天气、考试政策变化、最新资讯等），请主动调用 webSearch 搜索。
+            """;
+
+    /** SIMPLE 路由专用精简提示词：不带工具说明书，省 token 且杜绝工具误触发 */
+    private static final String SIMPLE_SYSTEM_PROMPT = """
+            你是 AI 学业规划助手【学途】，当前为日常对话模式。请简洁自然地回答用户的问题。
+            【回答规范】
+            1. 无法生成或发送文件，所有内容直接在回答中展示。
+            2. 禁止虚假操作叙述：严禁声称"正在执行/已完成/已导入"任何操作。
+            3. 严禁编造链接或 URL；无法验证链接真实性时改用文字描述。
+            4. 记忆时效性：【用户历史学习特征】中带时间标注（如"3周前"）的条目越久远可信度越低，
+               与用户当前表述矛盾时以当前说法为准，严禁把过时记忆当作当前事实。
+            若用户的问题实际需要操作日历、生成学习计划、安排复习或联网搜索，
+            请友好提示用户明确表达需求，例如：「帮我明天下午3点添加一个背单词任务」「帮我制定高数复习计划」。
             """;
 
     /**
@@ -195,26 +235,26 @@ public class ChatService {
             systemPrompt += WEBSEARCH_HINT;
         }
 
-        // 3. 构建 Spring AI Message 列表
-        List<Message> aiMessages = new ArrayList<>();
-        aiMessages.add(new SystemMessage(systemPrompt));
+        // 3. 构建 LangChain4j 消息列表
+        List<ChatMessage> aiMessages = new ArrayList<>();
+        aiMessages.add(SystemMessage.from(systemPrompt));
         for (Map<String, String> msg : history) {
             String role = msg.get("role");
             String content = msg.get("content");
             if ("assistant".equals(role)) {
-                aiMessages.add(new AssistantMessage(content));
+                aiMessages.add(AiMessage.from(content));
             } else if ("user".equals(role)) {
-                aiMessages.add(new UserMessage(content));
+                aiMessages.add(UserMessage.from(content));
             }
             // 其他角色（tool_call/tool_result）已在上游过滤，跳过
         }
-        aiMessages.add(new UserMessage(userMessage));
+        aiMessages.add(UserMessage.from(userMessage));
 
-        // 4. 调用大模型（带限流重试，设置工具上下文以便工具方法持久化消息）
-        ToolContextHolder.set(sessionId, userId);
+        // 4. 调用大模型（带工具循环 + 限流重试，设置线程上下文以便工具方法持久化消息）
+        ToolContextHolder.set(sessionId, userId, webSearch);
         String reply;
         try {
-            reply = callWithRetry(aiMessages, buildToolContext(sessionId, userId, webSearch));
+            reply = callWithRateRetry(() -> chatWithTools(aiMessages));
         } finally {
             ToolContextHolder.clear();
         }
@@ -239,8 +279,9 @@ public class ChatService {
     }
 
     /**
-     * SSE 流式对话：返回 Flux<String>，每生成一个 token 就推送给前端。
-     * 调用方拿到 Flux 后，需要收集完整响应再做记忆提取和缓存写入。
+     * SSE 流式对话（真流式）：StreamingChatModel 的 token 边生成边推给前端，
+     * 首 token 毫秒级到达，不再等整段生成完。调用方收集完整响应做记忆提取和缓存写入。
+     * 流式调用失败时降级为阻塞 chat + 分块模拟流式（保底）。
      */
     public Flux<String> chatStream(Long sessionId, String userMessage, boolean webSearch) {
         var session = sessionMapper.findById(sessionId);
@@ -249,112 +290,210 @@ public class ChatService {
         List<Map<String, String>> history = loadHistory(sessionId);
         String systemPrompt = buildStreamSystemPrompt(userId, sessionId, userMessage, webSearch);
 
-        List<Message> aiMessages = new ArrayList<>();
-        aiMessages.add(new SystemMessage(systemPrompt));
+        List<ChatMessage> aiMessages = new ArrayList<>();
+        aiMessages.add(SystemMessage.from(systemPrompt));
         for (Map<String, String> msg : history) {
             String role = msg.get("role");
             String content = msg.get("content");
             if ("assistant".equals(role)) {
-                aiMessages.add(new AssistantMessage(content));
+                aiMessages.add(AiMessage.from(content));
             } else if ("user".equals(role)) {
-                aiMessages.add(new UserMessage(content));
+                aiMessages.add(UserMessage.from(content));
             }
             // 其他角色（tool_call/tool_result）已在上游过滤，跳过
         }
-        aiMessages.add(new UserMessage(userMessage));
+        aiMessages.add(UserMessage.from(userMessage));
 
-        ToolContextHolder.set(sessionId, userId);
+        ToolContextHolder.set(sessionId, userId, webSearch);
+        try {
+            // 真流式：LLM token 边生成边推；异常降级为阻塞重试后分块模拟流式
+            return streamTokens(aiMessages)
+                    .doFinally(signal -> ToolContextHolder.clear())
+                    .onErrorResume(e -> {
+                        log.warn("流式对话调用失败，降级阻塞重试: {}", e.getMessage());
+                        return fallbackStream(aiMessages);
+                    });
+        } catch (Exception e) {
+            ToolContextHolder.clear();
+            log.warn("流式对话启动失败: {}", e.getMessage());
+            return Flux.just("抱歉，当前服务繁忙，请稍后再试");
+        }
+    }
 
-        return streamChatClient.prompt()
-                .messages(aiMessages)
-                .options(OpenAiChatOptions.builder().maxTokens(MAX_OUTPUT_TOKENS).build())
-                .stream()
-                .content()
-                .doFinally(signal -> ToolContextHolder.clear());
+    /** 把 StreamingChatModel 回调式 API 转换为 Flux<String>（token 逐个推） */
+    private Flux<String> streamTokens(List<ChatMessage> messages) {
+        return Flux.create(sink -> streamingChatModel.chat(messages, new StreamingChatResponseHandler() {
+            @Override
+            public void onPartialResponse(String partial) {
+                if (partial != null && !partial.isEmpty()) {
+                    sink.next(partial);
+                }
+            }
+
+            @Override
+            public void onPartialResponse(PartialResponse partialResponse, PartialResponseContext context) {
+                if (partialResponse != null && partialResponse.text() != null && !partialResponse.text().isEmpty()) {
+                    sink.next(partialResponse.text());
+                }
+            }
+
+            @Override
+            public void onCompleteResponse(ChatResponse response) {
+                sink.complete();
+            }
+
+            @Override
+            public void onError(Throwable error) {
+                sink.error(error);
+            }
+        }), FluxSink.OverflowStrategy.BUFFER);
+    }
+
+    /** 降级保底：流式失败时用阻塞模型生成整段，分块模拟流式发出 */
+    private Flux<String> fallbackStream(List<ChatMessage> messages) {
+        try {
+            String reply = callWithRateRetry(() -> chatNoTools(messages));
+            if (reply == null || reply.isBlank()) {
+                reply = "抱歉，当前服务繁忙，请稍后再试";
+            }
+            return chunked(reply);
+        } catch (Exception ex) {
+            log.error("降级阻塞调用失败: {}", ex.getMessage());
+            return Flux.just("抱歉，当前服务繁忙，请稍后再试");
+        }
+    }
+
+    /** 流式优先 + 工具兜底：先真流式生成（带工具规格，秒出首字）；
+     *  若模型在流式中请求调用工具（工具场景，通常不输出文本），
+     *  则丢弃流式结果，降级为阻塞工具循环执行后分块模拟流式输出。 */
+    private Flux<String> streamWithTools(List<ChatMessage> messages) {
+        return Flux.<String>create(sink -> {
+            List<ToolSpecification> specs = toolCallExecutor.specifications();
+            streamingChatModel.chat(ChatRequest.builder()
+                    .messages(messages)
+                    .toolSpecifications(specs)
+                    .build(), new StreamingChatResponseHandler() {
+                @Override
+                public void onPartialResponse(String partial) {
+                    if (partial != null && !partial.isEmpty()) {
+                        sink.next(partial);
+                    }
+                }
+
+                @Override
+                public void onPartialResponse(PartialResponse partialResponse, PartialResponseContext context) {
+                    if (partialResponse != null && partialResponse.text() != null && !partialResponse.text().isEmpty()) {
+                        sink.next(partialResponse.text());
+                    }
+                }
+
+                @Override
+                public void onCompleteResponse(ChatResponse response) {
+                    if (response.aiMessage() != null && response.aiMessage().hasToolExecutionRequests()) {
+                        sink.error(new ToolCallDetectedException());
+                    } else {
+                        sink.complete();
+                    }
+                }
+
+                @Override
+                public void onError(Throwable error) {
+                    sink.error(error);
+                }
+            });
+        }, FluxSink.OverflowStrategy.BUFFER)
+        .onErrorResume(e -> {
+            if (e instanceof ToolCallDetectedException) {
+                log.info("流式响应请求调用工具，降级为阻塞工具循环");
+                try {
+                    return chunked(callWithRateRetry(() -> chatWithTools(messages)));
+                } catch (Exception ex) {
+                    log.warn("工具循环调用失败: {}", ex.getMessage());
+                    return Flux.just("抱歉，当前服务繁忙，请稍后再试");
+                }
+            }
+            log.warn("流式调用失败: {}", e.getMessage());
+            return Flux.just("抱歉，当前服务繁忙，请稍后再试");
+        });
+    }
+
+    /** 标记流式响应中检测到工具调用请求（触发降级为阻塞工具循环） */
+    private static class ToolCallDetectedException extends RuntimeException {
+        public ToolCallDetectedException() {
+            super("streaming response contains tool calls");
+        }
     }
 
     /**
      * 带工具调用的 SSE 流式对话（工具类消息专用）：
-     * 复用注册了工具的 chatClient，工具多轮执行在服务端内部完成，
-     * 仅最终回答阶段流式输出 token，前端无需等待整段生成完。
+     * 工具多轮执行在服务端内部完成（阻塞 chat + 手动工具循环），
+     * 拿到完整回复后分块模拟流式输出，前端无需等待整段生成完。
      */
     public Flux<String> chatStreamWithTools(Long sessionId, String userMessage, boolean webSearch) {
         var session = sessionMapper.findById(sessionId);
         Long userId = session != null ? session.getUserId() : null;
 
         List<Map<String, String>> history = loadHistory(sessionId);
-        String systemPrompt = buildSystemPrompt(userId, sessionId, userMessage);
-        if (webSearch) {
-            systemPrompt += WEBSEARCH_HINT;
+
+        // 路由 Agent：规则优先判 SIMPLE/TOOL，判不准时 LLM 兜底，失败默认 TOOL（= 现状行为）
+        List<String> recentTurns = history.subList(Math.max(0, history.size() - 4), history.size()).stream()
+                .map(m -> ("assistant".equals(m.get("role")) ? "AI：" : "用户：") + m.get("content"))
+                .collect(Collectors.toList());
+        RouteDecision decision = chatRouter.route(recentTurns, userMessage);
+
+        String systemPrompt;
+        if (decision.route() == ChatRoute.SIMPLE) {
+            systemPrompt = buildSimpleSystemPrompt(userId, sessionId, userMessage);
+        } else {
+            systemPrompt = buildSystemPrompt(userId, sessionId, userMessage);
+            if (webSearch) {
+                systemPrompt += WEBSEARCH_HINT;
+            }
         }
 
-        List<Message> aiMessages = new ArrayList<>();
-        aiMessages.add(new SystemMessage(systemPrompt));
+        List<ChatMessage> aiMessages = new ArrayList<>();
+        aiMessages.add(SystemMessage.from(systemPrompt));
         for (Map<String, String> msg : history) {
             String role = msg.get("role");
             String content = msg.get("content");
             if ("assistant".equals(role)) {
-                aiMessages.add(new AssistantMessage(content));
+                aiMessages.add(AiMessage.from(content));
             } else if ("user".equals(role)) {
-                aiMessages.add(new UserMessage(content));
+                aiMessages.add(UserMessage.from(content));
             }
             // 其他角色（tool_call/tool_result）已在上游过滤，跳过
         }
-        aiMessages.add(new UserMessage(userMessage));
+        aiMessages.add(UserMessage.from(userMessage));
 
-        ToolContextHolder.set(sessionId, userId);
+        ToolContextHolder.set(sessionId, userId, webSearch);
 
-        // 注意：这里刻意不用 .stream() 流式工具调用 —— Spring AI M6 的流式聚合器对 DeepSeek/OpenAI
-        // 分片返回的 tool_calls（function.name 增量）会抛 "toolName cannot be null or empty"，
-        // 导致工具永远无法执行。改为阻塞 call()（M6 非流式工具聚合正常），拿到完整回复后分块模拟流式输出。
-        Map<String, Object> toolContext = buildToolContext(sessionId, userId, webSearch);
-        String fullReply;
-        String callError = null;
-        try {
-            fullReply = callWithRateRetry(() -> chatClient.prompt()
-                    .messages(aiMessages)
-                    .options(OpenAiChatOptions.builder().maxTokens(MAX_OUTPUT_TOKENS).build())
-                    .toolContext(toolContext)
-                    .call()
-                    .content());
-        } catch (Exception e) {
-            // 工具/网络异常 → 无工具降级重试一次（同样走阻塞 call + 限流退避）
-            callError = e.getMessage();
-            log.warn("工具调用失败，降级为无工具重试: {}", callError);
-            fullReply = fallbackCallNoTools(aiMessages, userId, sessionId, userMessage);
+        // SIMPLE：精简 prompt + 真流式（不带工具规格，省 token 且无工具误触发）
+        if (decision.route() == ChatRoute.SIMPLE) {
+            return streamTokens(aiMessages)
+                    .doFinally(signal -> ToolContextHolder.clear())
+                    .onErrorResume(e -> {
+                        log.warn("SIMPLE路由流式调用失败，降级阻塞重试: {}", e.getMessage());
+                        return fallbackStream(aiMessages);
+                    });
         }
-        if (fullReply == null || fullReply.isBlank()) {
-            if (callError != null) {
-                // 真实调用异常（限流/超时/工具错误，已退避重试仍失败）→ 服务繁忙占位
-                fullReply = isRateLimited(callError)
-                        ? "模型服务繁忙，请稍后再试" : "抱歉，当前服务繁忙，请稍后再试";
-                log.warn("模型调用失败返回占位回复，callError={}", callError);
-            } else {
-                // 模型调用成功但返回空内容（DeepSeek 偶发，已按退避重试3次仍为空）
-                fullReply = "模型未返回内容，请点击重新生成";
-                log.warn("模型调用成功但返回内容为空（已重试3次）");
-            }
-        }
-        return chunked(fullReply)
+
+        // TOOL：真流式优先（带工具规格）：秒出首字；模型请求工具时自动降级为阻塞工具循环
+        return streamWithTools(aiMessages)
                 .doFinally(signal -> ToolContextHolder.clear());
     }
 
     /** 无工具降级（阻塞 call）：替换 system 为无工具版，其余消息原样保留 */
-    private String fallbackCallNoTools(List<Message> originalMessages, Long userId, Long sessionId, String userMessage) {
+    private String fallbackCallNoTools(List<ChatMessage> originalMessages, Long userId, Long sessionId, String userMessage) {
         try {
             String fallbackPrompt = buildStreamSystemPrompt(userId, sessionId, userMessage, false);
             fallbackPrompt += "\n\n【重要】当前工具与联网搜索均不可用，涉及实时数据（价格、新闻、政策等）时严禁编造，请如实告知用户暂时无法获取实时数据。";
-            List<Message> fallbackMessages = new ArrayList<>();
-            fallbackMessages.add(new SystemMessage(fallbackPrompt));
-            for (Message m : originalMessages) {
+            List<ChatMessage> fallbackMessages = new ArrayList<>();
+            fallbackMessages.add(SystemMessage.from(fallbackPrompt));
+            for (ChatMessage m : originalMessages) {
                 if (m instanceof SystemMessage) continue;
                 fallbackMessages.add(m);
             }
-            return callWithRateRetry(() -> streamChatClient.prompt()
-                    .messages(fallbackMessages)
-                    .options(OpenAiChatOptions.builder().maxTokens(MAX_OUTPUT_TOKENS).build())
-                    .call()
-                    .content());
+            return callWithRateRetry(() -> chatNoTools(fallbackMessages));
         } catch (Exception ex) {
             log.error("无工具降级重试失败: {}", ex.getMessage());
             return null;
@@ -392,7 +531,9 @@ public class ChatService {
                 last = e;
                 String msg = e.getMessage() != null ? e.getMessage() : "";
                 if (isRateLimited(msg) && attempt < 2) {
-                    int waitMs = 1000 * (attempt + 1);
+                    // SiliconFlow 高峰 "System is too busy" 限流窗口常达数秒~数十秒，
+                    // 退避加大到 2s/4s 提高错开限流窗口的概率
+                    int waitMs = 2000 * (attempt + 1);
                     log.warn("模型限流(429)，等待{}ms后第{}次重试", waitMs, attempt + 2);
                     try {
                         Thread.sleep(waitMs);
@@ -418,30 +559,75 @@ public class ChatService {
                 || lower.contains("too busy") || lower.contains("50609");
     }
 
-    /** 将完整回复按小块切分模拟流式输出（保留前端逐 token 累积逻辑，前端无需改动） */
+    /** 无工具阻塞调用：单轮 chat，返回模型文本回复（DeepSeek 偶发空内容返回 null） */
+    private String chatNoTools(List<ChatMessage> messages) {
+        ChatResponse response = chatModel.chat(ChatRequest.builder()
+                .messages(messages)
+                .build());
+        AiMessage ai = response.aiMessage();
+        return ai != null ? ai.text() : null;
+    }
+
+    /**
+     * 带工具阻塞调用：手动工具循环（LangChain4j 无 AiServices 时的手写等价物）。
+     * 每轮 chat 若模型请求调用工具，则通过 ToolCallExecutor 依次执行并把结果以
+     * ToolExecutionResultMessage 追加回消息列表，再进入下一轮；直到模型直接输出
+     * 文本回复或超过 MAX_TOOL_ROUNDS 上限。
+     */
+    private String chatWithTools(List<ChatMessage> messages) {
+        List<ToolSpecification> specs = toolCallExecutor.specifications();
+        List<ChatMessage> current = new ArrayList<>(messages);
+        // 取最后一条用户消息，供评审Agent做结果相关性判断
+        String userMessage = null;
+        for (int i = current.size() - 1; i >= 0; i--) {
+            if (current.get(i) instanceof UserMessage um) {
+                userMessage = um.singleText();
+                break;
+            }
+        }
+        for (int round = 0; round < MAX_TOOL_ROUNDS; round++) {
+            ChatResponse response = chatModel.chat(ChatRequest.builder()
+                    .messages(current)
+                    .toolSpecifications(specs)
+                    .build());
+            AiMessage aiMessage = response.aiMessage();
+            if (aiMessage == null) {
+                return null;
+            }
+            if (aiMessage.hasToolExecutionRequests()) {
+                current.add(aiMessage);
+                for (ToolExecutionRequest request : aiMessage.toolExecutionRequests()) {
+                    String result = toolCallExecutor.execute(request);
+                    // 评审Agent：规则评审（防幻觉/防跨用户泄露）+ LLM 语义评审（只读工具），失败降级直通
+                    result = reviewAgent.review(userMessage, request, result);
+                    current.add(ToolExecutionResultMessage.from(request, result));
+                }
+            } else {
+                return aiMessage.text();
+            }
+        }
+        log.warn("工具循环超过{}轮仍未收敛，返回最后一轮内容", MAX_TOOL_ROUNDS);
+        return "抱歉，工具调用次数过多，请重试或简化请求";
+    }
+
+    /** 将完整回复按小块切分，块间加固定延迟模拟逐字输出（前端无需改动）。
+     *  延迟是关键：零间隔的 Flux 会被浏览器/JS 事件循环一次性吞掉，视觉上变成"整段输出"。
+     *  块 4 字符 + 10ms 间隔是"流式感"与"总时长"的折中：500 字回复约多花 1.2s。 */
+    private static final Duration CHUNK_INTERVAL = Duration.ofMillis(10);
+    private static final int CHUNK_SIZE = 4;
+
     private Flux<String> chunked(String reply) {
         List<String> chunks = new ArrayList<>();
         if (reply != null && !reply.isEmpty()) {
-            for (int i = 0; i < reply.length(); i += 2) {
-                chunks.add(reply.substring(i, Math.min(i + 2, reply.length())));
+            for (int i = 0; i < reply.length(); i += CHUNK_SIZE) {
+                chunks.add(reply.substring(i, Math.min(i + CHUNK_SIZE, reply.length())));
             }
         }
         if (chunks.isEmpty()) {
             chunks.add("抱歉，当前服务繁忙，请稍后再试");
         }
-        return Flux.fromIterable(chunks);
-    }
-
-    /**
-     * 构建工具调用上下文：通过 Spring AI ToolContext 传给工具方法。
-     * 流式端点工具在订阅线程执行，ThreadLocal 会丢失，必须走 ToolContext 参数注入。
-     */
-    private Map<String, Object> buildToolContext(Long sessionId, Long userId, boolean webSearch) {
-        Map<String, Object> ctx = new HashMap<>();
-        ctx.put("sessionId", sessionId);
-        ctx.put("userId", userId);
-        ctx.put("webSearch", webSearch);
-        return ctx;
+        return Flux.fromIterable(chunks)
+                .concatMap(chunk -> Mono.just(chunk).delayElement(CHUNK_INTERVAL));
     }
 
     /**
@@ -478,51 +664,24 @@ public class ChatService {
             systemPrompt += WEBSEARCH_HINT;
         }
 
-        List<Message> aiMessages = new ArrayList<>();
-        aiMessages.add(new SystemMessage(systemPrompt));
+        List<ChatMessage> aiMessages = new ArrayList<>();
+        aiMessages.add(SystemMessage.from(systemPrompt));
         for (Map<String, String> msg : history) {
             String role = msg.get("role");
             String content = msg.get("content");
             if ("assistant".equals(role)) {
-                aiMessages.add(new AssistantMessage(content));
+                aiMessages.add(AiMessage.from(content));
             } else if ("user".equals(role)) {
-                aiMessages.add(new UserMessage(content));
+                aiMessages.add(UserMessage.from(content));
             }
             // 其他角色（tool_call/tool_result）已在上游过滤，跳过
         }
-        aiMessages.add(new UserMessage(lastUserContent));
+        aiMessages.add(UserMessage.from(lastUserContent));
 
-        ToolContextHolder.set(sessionId, userId);
+        ToolContextHolder.set(sessionId, userId, webSearch);
 
-        // 与 chatStreamWithTools 一致：工具调用走阻塞 call()，规避 M6 流式工具聚合缺陷
-        Map<String, Object> toolContext = buildToolContext(sessionId, userId, webSearch);
-        String fullReply;
-        String callError = null;
-        try {
-            fullReply = callWithRateRetry(() -> chatClient.prompt()
-                    .messages(aiMessages)
-                    .options(OpenAiChatOptions.builder().maxTokens(MAX_OUTPUT_TOKENS).build())
-                    .toolContext(toolContext)
-                    .call()
-                    .content());
-        } catch (Exception e) {
-            callError = e.getMessage();
-            log.warn("重新生成工具调用失败，降级为无工具重试: {}", callError);
-            fullReply = fallbackCallNoTools(aiMessages, userId, sessionId, lastUserContent);
-        }
-        if (fullReply == null || fullReply.isBlank()) {
-            if (callError != null) {
-                // 真实调用异常（限流/超时/工具错误，已退避重试仍失败）→ 服务繁忙占位
-                fullReply = isRateLimited(callError)
-                        ? "模型服务繁忙，请稍后再试" : "抱歉，当前服务繁忙，请稍后再试";
-                log.warn("重新生成模型调用失败返回占位回复，callError={}", callError);
-            } else {
-                // 模型调用成功但返回空内容（DeepSeek 偶发，已按退避重试3次仍为空）
-                fullReply = "模型未返回内容，请点击重新生成";
-                log.warn("重新生成模型调用成功但返回内容为空（已重试3次）");
-            }
-        }
-        return chunked(fullReply)
+        // 真流式优先（带工具规格）：秒出首字；模型请求工具时自动降级为阻塞工具循环
+        return streamWithTools(aiMessages)
                 .doFinally(signal -> ToolContextHolder.clear());
     }
 
@@ -658,6 +817,18 @@ public class ChatService {
     }
 
     /**
+     * SIMPLE 路由精简提示词：角色规范 + 日期参考 + 用户上下文（昵称/日历/记忆召回保留，
+     * 个性化是核心卖点；省掉的是工具说明书和工具铁律段）。
+     */
+    private String buildSimpleSystemPrompt(Long userId, Long sessionId, String userMessage) {
+        String prompt = SIMPLE_SYSTEM_PROMPT + "\n\n" + buildDateReference();
+        if (userId != null) {
+            prompt += buildUserContext(userId, sessionId, userMessage);
+        }
+        return prompt;
+    }
+
+    /**
      * 构建用户上下文：今日日历 + 长时记忆召回（或档案兜底）。
      * 阻塞端与流式端共用，保证两个入口对 LLM 的上下文一致。
      */
@@ -785,20 +956,25 @@ public class ChatService {
      */
     private List<String> recallMemories(Long userId, String userMessage) {
         try {
-            List<Document> results = vectorStore.similaritySearch(
-                    SearchRequest.builder()
-                            .query(userMessage)
-                            .topK(RECALL_TOP_K)
-                            .filterExpression("userId == '" + userId + "'")
-                            .build()
-            );
-            return results.stream()
-                    .filter(d -> d.getScore() != null && d.getScore() >= RECALL_THRESHOLD)
-                    .map(Document::getText)
+            Embedding queryEmbedding = embeddingModel.embed(userMessage).content();
+            Filter filter = MetadataFilterBuilder.metadataKey("userId")
+                    .isEqualTo(String.valueOf(userId));
+            List<EmbeddingMatch<TextSegment>> matches = embeddingStore.search(
+                            EmbeddingSearchRequest.builder()
+                                    .queryEmbedding(queryEmbedding)
+                                    .maxResults(RECALL_TOP_K)
+                                    .minScore(RECALL_THRESHOLD)
+                                    .filter(filter)
+                                    .build())
+                    .matches();
+            return matches.stream()
+                    .map(m -> m.embedded() != null ? m.embedded().text() : null)
+                    .filter(java.util.Objects::nonNull)
                     .collect(Collectors.toList());
         } catch (Exception e) {
             log.warn("向量库召回失败，降级档案兜底: {}", e.getMessage());
-            return List.of();
+            // 注意：必须返回可变列表，调用方会对结果做 removeIf 过滤
+            return new ArrayList<>();
         }
     }
 
@@ -1011,12 +1187,12 @@ public class ChatService {
     }
 
     private List<Map<String, String>> loadFromMySQL(Long sessionId) {
-        List<ChatMessage> messages = messageMapper.findBySessionId(sessionId);
+        List<com.studentagent.studentagent.entity.ChatMessage> messages = messageMapper.findBySessionId(sessionId);
         List<Map<String, String>> history = new ArrayList<>();
         // 每轮（一条 user 消息）可能有多条 assistant 回复（重新生成时保留的旧版本），
         // 回放历史时每轮只保留最后一条（最新版本），旧版本仅用于前端切换展示
-        ChatMessage pendingAssistant = null;
-        for (ChatMessage msg : messages) {
+        com.studentagent.studentagent.entity.ChatMessage pendingAssistant = null;
+        for (com.studentagent.studentagent.entity.ChatMessage msg : messages) {
             String role = msg.getRole();
             // 工具调用/结果为模型内部过程消息，回放历史时过滤，避免污染用户上下文
             if ("tool_call".equals(role) || "tool_result".equals(role)) continue;
@@ -1094,30 +1270,30 @@ public class ChatService {
             systemPrompt += WEBSEARCH_HINT;
         }
 
-        List<Message> aiMessages = new ArrayList<>();
-        aiMessages.add(new SystemMessage(systemPrompt));
+        List<ChatMessage> aiMessages = new ArrayList<>();
+        aiMessages.add(SystemMessage.from(systemPrompt));
         for (Map<String, String> msg : fullHistory) {
             String role = msg.get("role");
             String content = msg.get("content");
             if ("assistant".equals(role)) {
-                aiMessages.add(new AssistantMessage(content));
+                aiMessages.add(AiMessage.from(content));
             } else if ("user".equals(role)) {
-                aiMessages.add(new UserMessage(content));
+                aiMessages.add(UserMessage.from(content));
             }
         }
-        aiMessages.add(new UserMessage(lastUserContent));
+        aiMessages.add(UserMessage.from(lastUserContent));
 
-        // 调用大模型（带限流重试）
-        ToolContextHolder.set(sessionId, userId);
+        // 调用大模型（带工具循环 + 限流重试，设置线程上下文以便工具方法持久化消息）
+        ToolContextHolder.set(sessionId, userId, webSearch);
         String reply;
         try {
-            reply = callWithRetry(aiMessages, buildToolContext(sessionId, userId, webSearch));
+            reply = callWithRateRetry(() -> chatWithTools(aiMessages));
         } finally {
             ToolContextHolder.clear();
         }
         if (reply == null) {
             // LLM 失败：用户消息仍在 MySQL 中，把失败占位回复同时写入 MySQL + Redis，保持两份历史一致
-            ChatMessage failMsg = new ChatMessage();
+            com.studentagent.studentagent.entity.ChatMessage failMsg = new com.studentagent.studentagent.entity.ChatMessage();
             failMsg.setSessionId(sessionId);
             failMsg.setRole("assistant");
             failMsg.setContent("抱歉，当前服务繁忙，请稍后再试");
@@ -1129,7 +1305,7 @@ public class ChatService {
         // 提取内联记忆，存干净回复
         String cleanReply = processInlineMemory(userId, reply);
 
-        ChatMessage aiMsg = new ChatMessage();
+        com.studentagent.studentagent.entity.ChatMessage aiMsg = new com.studentagent.studentagent.entity.ChatMessage();
         aiMsg.setSessionId(sessionId);
         aiMsg.setRole("assistant");
         aiMsg.setContent(cleanReply);
@@ -1144,60 +1320,17 @@ public class ChatService {
     }
 
     /**
-     * 带限流重试的 LLM 调用
-     * 429 限流等待 8s/16s；5xx/超时/连接异常属于瞬时故障，快速重试 3s/6s
-     */
-    private String callWithRetry(List<Message> messages, Map<String, Object> toolContext) {
-        for (int i = 0; i <= 2; i++) {
-            try {
-                return chatClient.prompt()
-                        .messages(messages)
-                        .options(OpenAiChatOptions.builder()
-                                .maxTokens(MAX_OUTPUT_TOKENS)
-                                .build())
-                        .toolContext(toolContext)
-                        .call()
-                        .content();
-            } catch (Exception e) {
-                String msg = e.getMessage() != null ? e.getMessage() : "";
-                if (i < 2) {
-                    String lower = msg.toLowerCase();
-                    boolean timeoutLike = lower.contains("timeout") || lower.contains("timed out")
-                            || lower.contains("connection reset") || lower.contains("eof")
-                            || lower.contains("upstream");
-                    if (msg.contains("429")) {
-                        int waitSec = (i + 1) * 8; // 限流 8s / 16s
-                        log.warn("LLM限流重试({}/2), 等待{}秒", i + 1, waitSec);
-                        try { Thread.sleep(waitSec * 1000L); } catch (InterruptedException ignored) {}
-                        continue;
-                    }
-                    boolean serverError = msg.contains("500") || msg.contains("502")
-                            || msg.contains("503") || msg.contains("504") || timeoutLike;
-                    if (serverError) {
-                        int waitSec = (i + 1) * 3; // 服务端瞬时错误 3s / 6s
-                        log.warn("LLM服务异常重试({}/2), 等待{}秒: {}", i + 1, waitSec, msg);
-                        try { Thread.sleep(waitSec * 1000L); } catch (InterruptedException ignored) {}
-                        continue;
-                    }
-                }
-                log.error("LLM调用失败: {}", msg);
-                return null;
-            }
-        }
-        return null;
-    }
-
-    /**
      * 异步用 AI 生成会话标题
      */
     @Async("memoryExtractExecutor")
     public void generateTitleAsync(Long sessionId, String firstMessage) {
         try {
-            String result = chatClient.prompt()
-                    .system("用6-10个字概括用户的问题作为对话标题，只输出标题，不要带引号和标点。")
-                    .user(firstMessage)
-                    .call()
-                    .content();
+            String result = chatModel.chat(ChatRequest.builder()
+                    .messages(List.of(
+                            SystemMessage.from("用6-10个字概括用户的问题作为对话标题，只输出标题，不要带引号和标点。"),
+                            UserMessage.from(firstMessage)))
+                    .build())
+                    .aiMessage().text();
             if (result != null && !result.isBlank()) {
                 String title = result.trim();
                 if (title.length() > 20) title = title.substring(0, 20);
@@ -1229,15 +1362,19 @@ public class ChatService {
             return reply;
         }
 
+        // 防泄露兜底：即使 AI 只写了 ---MEMORY--- 未写 ---END---（格式漂移/被截断），
+        // 也必须把 marker 至末尾整块剥离，绝不把记忆块暴露给用户。
         int endIdx = reply.indexOf(endMarker, startIdx);
-        if (endIdx == -1) {
-            log.debug("用户{}的回复含---MEMORY---但无---END---，跳过内联提取", userId);
-            return reply;
-        }
-
-        String memBlock = reply.substring(startIdx + marker.length(), endIdx).trim();
+        String memBlock;
         String beforeBlock = reply.substring(0, startIdx);
-        String afterBlock = reply.substring(endIdx + endMarker.length());
+        String afterBlock = "";
+        if (endIdx == -1) {
+            log.debug("用户{}的回复含---MEMORY---但无---END---，按到末尾剥离防泄露", userId);
+            memBlock = reply.substring(startIdx + marker.length()).trim();
+        } else {
+            memBlock = reply.substring(startIdx + marker.length(), endIdx).trim();
+            afterBlock = reply.substring(endIdx + endMarker.length());
+        }
         String cleanReply = (beforeBlock + afterBlock).replaceAll("\\n{3,}", "\n\n").trim();
 
         if (!memBlock.isEmpty() && !memBlock.equals("无")) {

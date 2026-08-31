@@ -4,12 +4,21 @@ import com.studentagent.studentagent.entity.ChatMessage;
 import com.studentagent.studentagent.entity.MemoryRecord;
 import com.studentagent.studentagent.mapper.MemoryRecordMapper;
 import com.studentagent.studentagent.mapper.MessageMapper;
+import dev.langchain4j.data.document.Metadata;
+import dev.langchain4j.data.embedding.Embedding;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.embedding.EmbeddingModel;
+import dev.langchain4j.store.embedding.EmbeddingMatch;
+import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
+import dev.langchain4j.store.embedding.EmbeddingStore;
+import dev.langchain4j.store.embedding.filter.Filter;
+import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.document.Document;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
@@ -31,9 +40,10 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class MemoryExtractService {
 
-    private final ChatClient chatClient;
+    private final ChatModel chatModel;
     private final StringRedisTemplate redisTemplate;
-    private final VectorStore vectorStore;
+    private final EmbeddingStore<TextSegment> embeddingStore;
+    private final EmbeddingModel embeddingModel;
     private final MemoryRecordMapper memoryRecordMapper;
     private final MessageMapper messageMapper;
     private final ProfileService profileService;
@@ -121,11 +131,12 @@ public class MemoryExtractService {
      * 调用大模型提取记忆
      */
     private String doExtract(String conversationText) {
-        return chatClient.prompt()
-                .system(EXTRACT_PROMPT)
-                .user(conversationText)
-                .call()
-                .content();
+        return chatModel.chat(ChatRequest.builder()
+                .messages(List.of(
+                        SystemMessage.from(EXTRACT_PROMPT),
+                        UserMessage.from(conversationText)))
+                .build())
+                .aiMessage().text();
     }
 
     /**
@@ -166,25 +177,29 @@ public class MemoryExtractService {
         List<String> newItems;
         if (!skipDedup) {
             // 2. 批量去重：一次性查回用户全部已有记忆，内存比对
-            List<Document> existingDocs;
+            List<EmbeddingMatch<TextSegment>> existingMatches;
             try {
-                existingDocs = vectorStore.similaritySearch(
-                        SearchRequest.builder()
-                                .query(candidates.get(0) + " " + candidates.get(candidates.size() - 1))
-                                .topK(50)
-                                .filterExpression("userId == '" + userId + "' && type == 'extracted'")
-                                .build()
-                );
+                Embedding queryEmbedding = embeddingModel.embed(
+                        candidates.get(0) + " " + candidates.get(candidates.size() - 1)).content();
+                Filter filter = Filter.and(
+                        MetadataFilterBuilder.metadataKey("userId").isEqualTo(String.valueOf(userId)),
+                        MetadataFilterBuilder.metadataKey("type").isEqualTo("extracted"));
+                existingMatches = embeddingStore.search(EmbeddingSearchRequest.builder()
+                                .queryEmbedding(queryEmbedding)
+                                .maxResults(50)
+                                .filter(filter)
+                                .build())
+                        .matches();
             } catch (Exception e) {
                 log.warn("批量去重检索失败，按非重复处理: {}", e.getMessage());
-                existingDocs = List.of();
+                existingMatches = List.of();
             }
 
             newItems = new ArrayList<>();
             for (String candidate : candidates) {
-                double best = existingDocs.stream()
-                        .filter(d -> d.getScore() != null)
-                        .mapToDouble(d -> cosineSim(d.getText(), candidate))
+                double best = existingMatches.stream()
+                        .filter(m -> m.embedded() != null)
+                        .mapToDouble(m -> cosineSim(m.embedded().text(), candidate))
                         .max()
                         .orElse(0.0);
                 if (best >= DEDUP_THRESHOLD) {
@@ -232,7 +247,7 @@ public class MemoryExtractService {
                 }
                 if (!deleteVectorIds.isEmpty()) {
                     try {
-                        vectorStore.delete(deleteVectorIds);
+                        embeddingStore.removeAll(deleteVectorIds);
                         log.info("Chroma删除被覆盖记忆{}条", deleteVectorIds.size());
                     } catch (Exception e) {
                         log.warn("Chroma删除被覆盖记忆失败: {}", e.getMessage());
@@ -246,38 +261,38 @@ public class MemoryExtractService {
             log.warn("记忆冲突覆盖处理失败: {}", e.getMessage());
         }
 
-        // 4. 批量写入 Chroma
-        List<Document> docs = new ArrayList<>();
-        List<MemoryRecord> records = new ArrayList<>();
-        for (String text : newItems) {
-            String docId = UUID.randomUUID().toString();
-            docs.add(Document.builder()
-                    .id(docId)
-                    .text(text)
-                    .metadata(Map.of("userId", String.valueOf(userId), "type", "extracted"))
-                    .build());
-
-            MemoryRecord record = new MemoryRecord();
-            record.setUserId(userId);
-            record.setMemoryText(text);
-            record.setVectorId(docId);
-            records.add(record);
-        }
-
+        // 4. 批量写入 Chroma（先 embedAll 一次性嵌入，再按自定义 docId 写入）
         try {
-            vectorStore.add(docs);
-            log.info("Chroma批量写入{}条成功", docs.size());
+            List<String> ids = new ArrayList<>();
+            List<TextSegment> segments = new ArrayList<>();
+            List<MemoryRecord> records = new ArrayList<>();
+            for (int i = 0; i < newItems.size(); i++) {
+                String text = newItems.get(i);
+                String docId = UUID.randomUUID().toString();
+                ids.add(docId);
+                segments.add(TextSegment.from(text, Metadata.from(Map.of(
+                        "userId", String.valueOf(userId), "type", "extracted"))));
+
+                MemoryRecord record = new MemoryRecord();
+                record.setUserId(userId);
+                record.setMemoryText(text);
+                record.setVectorId(docId);
+                records.add(record);
+            }
+            List<Embedding> embeddings = embeddingModel.embedAll(segments).content();
+
+            embeddingStore.addAll(ids, embeddings, segments);
+            log.info("Chroma批量写入{}条成功", ids.size());
+
+            // 5. 批量写 MySQL
+            if (!records.isEmpty()) {
+                memoryRecordMapper.batchInsert(records);
+            }
+            return newItems.size();
         } catch (Exception e) {
             log.error("Chroma批量写入失败: {}", e.getMessage());
             return 0;
         }
-
-        // 4. 批量写 MySQL
-        if (!records.isEmpty()) {
-            memoryRecordMapper.batchInsert(records);
-        }
-
-        return newItems.size();
     }
 
     /** 简单的文本相似度比对（避免频繁调 Chroma） */
@@ -377,16 +392,23 @@ public class MemoryExtractService {
     public void clearMemories(Long userId) {
         try {
             // 1. 从 Chroma 检索并删除所有 type=extracted 记忆
-            List<Document> docs = vectorStore.similaritySearch(
-                    SearchRequest.builder()
-                            .query("学习记忆")
-                            .topK(200)
-                            .filterExpression("userId == '" + userId + "' && type == 'extracted'")
-                            .build()
-            );
-            if (!docs.isEmpty()) {
-                List<String> docIds = docs.stream().map(Document::getId).collect(Collectors.toList());
-                vectorStore.delete(docIds);
+            Embedding queryEmbedding = embeddingModel.embed("学习记忆").content();
+            Filter filter = Filter.and(
+                    MetadataFilterBuilder.metadataKey("userId").isEqualTo(String.valueOf(userId)),
+                    MetadataFilterBuilder.metadataKey("type").isEqualTo("extracted"));
+            List<EmbeddingMatch<TextSegment>> matches = embeddingStore.search(
+                            EmbeddingSearchRequest.builder()
+                                    .queryEmbedding(queryEmbedding)
+                                    .maxResults(200)
+                                    .filter(filter)
+                                    .build())
+                    .matches();
+            if (!matches.isEmpty()) {
+                List<String> docIds = matches.stream()
+                        .map(EmbeddingMatch::embeddingId)
+                        .filter(java.util.Objects::nonNull)
+                        .collect(Collectors.toList());
+                embeddingStore.removeAll(docIds);
                 // 同步删除 MySQL 中对应记录
                 for (String docId : docIds) {
                     memoryRecordMapper.deleteByVectorId(docId);
@@ -442,7 +464,7 @@ public class MemoryExtractService {
                 if (text.equals(r.getMemoryText())) {
                     if (r.getVectorId() != null) {
                         try {
-                            vectorStore.delete(List.of(r.getVectorId()));
+                            embeddingStore.removeAll(List.of(r.getVectorId()));
                         } catch (Exception ve) {
                             log.warn("删除记忆向量失败: {}", ve.getMessage());
                         }

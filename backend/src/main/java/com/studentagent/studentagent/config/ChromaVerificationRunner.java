@@ -1,9 +1,13 @@
 package com.studentagent.studentagent.config;
 
+import dev.langchain4j.data.document.Metadata;
+import dev.langchain4j.data.embedding.Embedding;
+import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.model.embedding.EmbeddingModel;
+import dev.langchain4j.store.embedding.EmbeddingMatch;
+import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
+import dev.langchain4j.store.embedding.EmbeddingStore;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.document.Document;
-import org.springframework.ai.vectorstore.SearchRequest;
-import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
@@ -19,10 +23,13 @@ import java.util.UUID;
 @Component
 public class ChromaVerificationRunner implements CommandLineRunner {
 
-    private final VectorStore vectorStore;
+    private final EmbeddingStore<TextSegment> embeddingStore;
+    private final EmbeddingModel embeddingModel;
 
-    public ChromaVerificationRunner(VectorStore vectorStore) {
-        this.vectorStore = vectorStore;
+    public ChromaVerificationRunner(EmbeddingStore<TextSegment> embeddingStore,
+                                    EmbeddingModel embeddingModel) {
+        this.embeddingStore = embeddingStore;
+        this.embeddingModel = embeddingModel;
     }
 
     @Override
@@ -34,25 +41,23 @@ public class ChromaVerificationRunner implements CommandLineRunner {
 
         try {
             // ========== 1. 新增文档 ==========
-            Document doc = Document.builder()
-                    .id(testDocId)
-                    .text(testContent)
-                    .metadata(Map.of("userId", "0", "type", "test"))
-                    .build();
-            vectorStore.add(List.of(doc));
+            Embedding testEmbedding = embeddingModel.embed(testContent).content();
+            embeddingStore.addAll(List.of(testDocId),
+                    List.of(testEmbedding),
+                    List.of(TextSegment.from(testContent, Metadata.from(Map.of("userId", "0", "type", "test")))));
             log.info("[验证1-新增] 文档写入成功, docId={}", testDocId);
 
             // 等待 Chroma 索引完成
             Thread.sleep(1500);
 
             // ========== 2. 相似度检索 ==========
-            List<Document> results = vectorStore.similaritySearch(
-                    SearchRequest.builder()
-                            .query("线性代数基础薄弱")
-                            .topK(3)
-                            .build()
-            );
-            boolean found = results.stream().anyMatch(r -> testDocId.equals(r.getId()));
+            List<EmbeddingMatch<TextSegment>> results = embeddingStore.search(
+                            EmbeddingSearchRequest.builder()
+                                    .queryEmbedding(embeddingModel.embed("线性代数基础薄弱").content())
+                                    .maxResults(3)
+                                    .build())
+                    .matches();
+            boolean found = results.stream().anyMatch(m -> testDocId.equals(m.embeddingId()));
             if (found) {
                 log.info("[验证2-检索] 相似度检索成功，召回文档数量={}, 目标文档已召回", results.size());
             } else {
@@ -60,18 +65,18 @@ public class ChromaVerificationRunner implements CommandLineRunner {
             }
 
             // ========== 3. 删除文档 ==========
-            vectorStore.delete(List.of(testDocId));
+            embeddingStore.removeAll(List.of(testDocId));
             log.info("[验证3-删除] 文档删除指令已发送, docId={}", testDocId);
 
             // 等待删除生效后再次检索确认
             Thread.sleep(1000);
-            List<Document> afterDelete = vectorStore.similaritySearch(
-                    SearchRequest.builder()
-                            .query("线性代数基础薄弱")
-                            .topK(3)
-                            .build()
-            );
-            boolean stillExists = afterDelete.stream().anyMatch(r -> testDocId.equals(r.getId()));
+            List<EmbeddingMatch<TextSegment>> afterDelete = embeddingStore.search(
+                            EmbeddingSearchRequest.builder()
+                                    .queryEmbedding(embeddingModel.embed("线性代数基础薄弱").content())
+                                    .maxResults(3)
+                                    .build())
+                    .matches();
+            boolean stillExists = afterDelete.stream().anyMatch(m -> testDocId.equals(m.embeddingId()));
             if (!stillExists) {
                 log.info("[验证3-删除] 删除确认成功，目标文档已从检索结果中清除");
             } else {

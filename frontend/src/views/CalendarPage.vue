@@ -40,7 +40,7 @@
           <span class="cal-fs-day-num">{{ day.day }}</span>
           <div class="cal-fs-events">
             <div v-for="ev in dayFsEvents(day)" :key="ev.eventId"
-                 :class="['cal-fs-tag', ev.eventType, { done: ev.completed, review: isReviewEvent(ev) }]"
+                 :class="['cal-fs-tag', ev.eventType, { done: eventDoneOn(ev, day.date), review: isReviewEvent(ev) }]"
                  :style="{ background: ev.color }"
                  :title="ev.title">
               <span v-if="isReviewEvent(ev)" class="cal-fs-review-badge">复</span>
@@ -104,6 +104,11 @@
         </el-form-item>
       </el-form>
       <template #footer>
+        <el-button v-if="isEditing" type="success" plain
+                   style="margin-right:auto"
+                   @click="markEditingEventDone">
+          {{ editingEventCompleted ? '取消完成' : '完成任务' }}
+        </el-button>
         <el-button @click="eventFormVisible = false">取消</el-button>
         <el-button type="primary" @click="submitEventForm" :disabled="!eventForm.title.trim() || !eventForm.eventDate">
           {{ isEditing ? '保存修改' : '添加' }}
@@ -183,6 +188,16 @@ const isReviewEvent = (ev) => !!ev && (ev.eventType === 'review' || (typeof ev.t
 /** 考试任务识别：type=exam */
 const isExamEvent = (ev) => !!ev && ev.eventType === 'exam'
 
+/** 跨天任务（endDate 非空）按天打卡：完成状态看 completedDates 是否含当天；单日任务看 completed */
+const isMultiDayEvent = (ev) => !!ev && !!ev.endDate
+const doneDateList = (ev) => (typeof ev?.completedDates === 'string' && ev.completedDates)
+  ? ev.completedDates.split(',').filter(Boolean) : []
+const eventDoneOn = (ev, date) => isMultiDayEvent(ev) ? doneDateList(ev).includes(date) : !!ev?.completed
+const todayDateStr = () => {
+  const d = new Date()
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
 const calFsPrevMonth = () => {
   if (calFsMonth.value === 1) { calFsYear.value--; calFsMonth.value = 12 } else calFsMonth.value--
   fetchFsEvents()
@@ -234,6 +249,7 @@ const clearAllEvents = async () => {
 const eventFormVisible = ref(false)
 const isEditing = ref(false)
 const editingEventId = ref(null)
+const editingEventCompleted = ref(false)
 
 const eventForm = ref({
   title: '',
@@ -274,7 +290,24 @@ const openEditEvent = (ev) => {
   }
   isEditing.value = true
   editingEventId.value = ev.eventId
+  // 跨天任务按天打卡：编辑弹窗展示的是「今天」的打卡状态
+  editingEventCompleted.value = eventDoneOn(ev, todayDateStr())
   eventFormVisible.value = true
+}
+
+// 编辑弹窗内一键完成任务（可补完成历史任务 / 提前完成未来任务）
+const markEditingEventDone = async () => {
+  const target = !editingEventCompleted.value
+  try {
+    await request.put(`/calendar/${editingEventId.value}/complete`, { completed: target })
+    ElMessage.success(target ? '任务已完成' : '已取消完成')
+    eventFormVisible.value = false
+    dayDetailVisible.value = false
+    await fetchFsEvents()
+  } catch (e) {
+    const msg = e?.response?.data?.msg || e?.message || '操作失败'
+    ElMessage.error(typeof msg === 'string' ? msg : '操作失败')
+  }
 }
 
 const submitEventForm = async () => {

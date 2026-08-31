@@ -54,8 +54,8 @@
           <h4>今日任务</h4>
           <div v-if="todayTasks.length === 0" class="today-empty">今天没有安排</div>
           <div v-for="t in todayTasks" :key="t.eventId" class="today-task">
-            <el-checkbox :model-value="t.completed" @change="toggleComplete(t)" />
-            <span :class="{ done: t.completed }">{{ t.title }}</span>
+            <el-checkbox :model-value="eventDoneOn(t, todayDateStr())" @change="toggleComplete(t)" />
+            <span :class="{ done: eventDoneOn(t, todayDateStr()) }">{{ t.title }}</span>
             <el-tag :type="t.eventType === 'plan' ? 'danger' : 'success'" size="small">{{ t.eventType === 'plan' ? '计划' : '任务' }}</el-tag>
           </div>
         </div>
@@ -234,7 +234,7 @@
               <span class="cal-day-num">{{ day.day }}</span>
               <div class="cal-day-events">
                 <div v-for="ev in dayEvents(day)" :key="ev.eventId"
-                     :class="['cal-event-tag', ev.eventType, { done: ev.completed, review: isReviewEvent(ev) }]"
+                     :class="['cal-event-tag', ev.eventType, { done: eventDoneOn(ev, day.date), review: isReviewEvent(ev) }]"
                      :style="{ background: ev.color }"
                      :title="ev.title">
                   <span v-if="isReviewEvent(ev)" class="cal-event-review-badge">复</span>
@@ -1300,6 +1300,16 @@ const dayEvents = (day) => filterEvents(calEvents.value, day)
 /** 复习任务识别：标题以「复习·」开头（艾宾浩斯排期工具创建） */
 const isReviewEvent = (ev) => !!ev && (ev.eventType === 'review' || (typeof ev.title === 'string' && ev.title.startsWith('复习·')))
 
+/** 跨天任务（endDate 非空）按天打卡：完成状态看 completedDates 是否含当天；单日任务看 completed */
+const isMultiDayEvent = (ev) => !!ev && !!ev.endDate
+const doneDateList = (ev) => (typeof ev?.completedDates === 'string' && ev.completedDates)
+  ? ev.completedDates.split(',').filter(Boolean) : []
+const eventDoneOn = (ev, date) => isMultiDayEvent(ev) ? doneDateList(ev).includes(date) : !!ev?.completed
+const todayDateStr = () => {
+  const d = new Date()
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
 /** 考试任务识别：type=exam */
 const isExamEvent = (ev) => !!ev && ev.eventType === 'exam'
 
@@ -1449,8 +1459,16 @@ const loadTodayTasks = async () => {
 
 const toggleComplete = async (t) => {
   try {
-    await request.put(`/calendar/${t.eventId}/complete`, { completed: !t.completed })
-    t.completed = !t.completed
+    const target = !eventDoneOn(t, todayDateStr())
+    await request.put(`/calendar/${t.eventId}/complete`, { completed: target })
+    if (isMultiDayEvent(t)) {
+      // 跨天任务：本地更新打卡日期串，只影响今天
+      const set = new Set(doneDateList(t))
+      if (target) set.add(todayDateStr()); else set.delete(todayDateStr())
+      t.completedDates = [...set].sort().join(',')
+    } else {
+      t.completed = !t.completed
+    }
     await refreshBothCalendars()
   } catch {}
 }

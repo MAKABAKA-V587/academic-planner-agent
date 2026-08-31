@@ -28,27 +28,32 @@ spring:
       host: localhost
       port: 6379
 
-  # AI 配置（SiliconFlow 硅基流动，同时支持聊天和Embedding）
-  ai:
-    openai:
+# AI 配置（SiliconFlow 硅基流动，OpenAI 兼容，同时支持聊天和Embedding）
+# 注意：必须放在顶层 langchain4j 前缀下（starter 的 @ConfigurationProperties 绑定 langchain4j.*），
+# 不能放进 spring.* 下，否则 base-url/api-key/model-name 全部绑定不上，模型会默认连 api.openai.com
+langchain4j:
+  # 聊天模型（阻塞）
+  open-ai:
+    chat-model:
       api-key: ${SILICONFLOW_API_KEY:}
-      base-url: https://api.siliconflow.cn
-      chat:
-        options:
-          model: deepseek-ai/DeepSeek-V3
-          max-tokens: 8192
-      embedding:
-        options:
-          model: Qwen/Qwen3-Embedding-0.6B
-
-    # Chroma 向量库配置
-    vectorstore:
-      chroma:
-        initialize-schema: true
-        client:
-          host: http://localhost
-          port: 8000
-        collection-name: student_memory
+      base-url: https://api.siliconflow.cn/v1
+      model-name: deepseek-ai/DeepSeek-V3
+      max-tokens: 8192
+    # 流式聊天模型
+    streaming-chat-model:
+      api-key: ${SILICONFLOW_API_KEY:}
+      base-url: https://api.siliconflow.cn/v1
+      model-name: deepseek-ai/DeepSeek-V3
+      max-tokens: 8192
+    # Embedding 模型
+    embedding-model:
+      api-key: ${SILICONFLOW_API_KEY:}
+      base-url: https://api.siliconflow.cn/v1
+      model-name: Qwen/Qwen3-Embedding-0.6B
+  # Chroma 向量库
+  chroma:
+    base-url: http://localhost:8000
+    collection-name: student_memory
 
 # MyBatis 配置
 mybatis:
@@ -62,7 +67,7 @@ mybatis:
 logging:
   level:
     org.springframework.web.client.RestClient: INFO
-    org.springframework.ai.openai.api.OpenAiApi: INFO
+    dev.langchain4j: INFO
 
 # 服务端口
 server:
@@ -71,3 +76,15 @@ server:
 # Tavily 联网搜索配置（去 https://tavily.com 注册免费 Key）
 tavily:
   api-key: ${TAVILY_API_KEY:}
+
+# 路由 Agent（阶段1：意图路由）——规则优先判 SIMPLE/TOOL，LLM 兜底，失败默认 TOOL（=现状行为）
+# 评审 Agent（阶段2：工具结果质检）——规则评审防幻觉/防跨用户泄露（全工具），LLM 语义评审仅只读工具
+agent:
+  router:
+    enabled: true          # 总开关，false 时一键回退全量工具路径
+    llm-fallback: true     # 规则未命中时是否启用 LLM 二级路由
+    llm-timeout-ms: 1500   # LLM 路由超时，超时默认 TOOL
+  review:
+    enabled: true            # 总开关，false 时评审全直通（一键回滚 = 现状）
+    llm-timeout-ms: 2000     # LLM 评审超时，超时放行原始结果
+    llm-tools: searchKnowledge,webSearch,queryEvents   # 走 LLM 语义评审的只读工具
