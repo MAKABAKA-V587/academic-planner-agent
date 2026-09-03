@@ -52,7 +52,7 @@ LangChain4j `@Tool` 注解 + 手动工具循环：日历增删查、学习计划
 | 模型 | DeepSeek-V3（聊天，SiliconFlow）、Qwen3-Embedding-0.6B（向量） |
 | 存储 | MySQL 8、Redis 7（对话历史缓存）、Chroma（向量库） |
 | 前端 | Vue 3 + Vite + Element Plus、SSE 流式渲染 |
-| 测试 | JUnit 5 + Mockito（10 类 77 用例）、Testcontainers、PowerShell 21 条端到端回归、GitHub Actions CI |
+| 测试 | JUnit 5 + Mockito（10 类 76 用例）、Testcontainers、PowerShell 21 条端到端回归、GitHub Actions CI |
 
 ## 快速开始
 

@@ -13,6 +13,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MySQLContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
@@ -27,9 +28,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 集成测试（Testcontainers）：真实 MySQL + Redis 容器内加载完整 Spring 上下文，
+ * 集成测试（Testcontainers）：真实 MySQL + Redis + Chroma 容器内加载完整 Spring 上下文，
  * 覆盖 Mapper 落库回环与对话历史缓存回环。CI（ubuntu-latest 自带 Docker）与本地均可运行。
- * LLM/搜索 API 用占位 key（Bean 构造不外呼；两个 CommandLineRunner 自带异常兜底不阻塞启动）。
+ * LLM/搜索 API 用占位 key（Bean 构造不外呼；两个 CommandLineRunner 自带异常兜底不阻塞启动）；
+ * Chroma 为真实容器（embeddingStore Bean 构造时即建集合，无法用占位服务替代）。
  */
 @SpringBootTest
 @Testcontainers
