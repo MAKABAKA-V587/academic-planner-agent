@@ -1,10 +1,10 @@
 # Student Agent — AI 学习规划智能体
 
-[![CI](https://github.com/OWNER/student-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/student-agent/actions/workflows/ci.yml)
+[![CI](https://github.com/MAKABAKA-V587/academic-planner-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/MAKABAKA-V587/academic-planner-agent/actions/workflows/ci.yml)
 
 基于 Spring Boot 3 + LangChain4j 构建的学习助手：支持多轮流式对话、向量长期记忆、日历任务管理、学习计划生成、艾宾浩斯复习排期、学习周报与用户画像。
 
-> 核心亮点：**双 Agent 协作**（路由 Agent + 评审 Agent）+ **真流式优先/工具兜底双通道** + **向量长期记忆**
+> 核心亮点：**双 Agent 协作**（路由 Agent + 评审 Agent）+ **真流式优先/工具兜底双通道** + **向量长期记忆与滚动摘要** + **每日 token 额度控制**
 
 ## 架构
 
@@ -40,6 +40,10 @@ flowchart LR
 ### 4. 工具系统
 LangChain4j `@Tool` 注解 + 手动工具循环：日历增删查、学习计划生成、艾宾浩斯复习排期、知识库检索、联网搜索。用户身份/会话通过 ThreadLocal 上下文传递。
 
+### 5. 上下文与成本控制
+- **滚动摘要**：对话历史只保留最近 8 轮；滑出窗口的轮次累计 ≥3 时触发异步 LLM 摘要，以【此前对话摘要】段注入系统提示词。摘要用水位线（upTo message_id）幂等推进，Redis 分布式锁防并发重复摘要，双写 Redis（TTL 7 天）+ MySQL
+- **每日 token 额度**（`TokenBudgetService`）：Redis Hash 按用户按日累计 token，6 个 LLM 入口（聊天/路由兜底/评审/摘要/记忆提取/标签）统一限额拦截，超限友好拒绝不发请求；一次请求内 ThreadLocal 累计、结束一次性写回；记账故障自动降级放行，不影响对话可用性
+
 ## 技术栈
 
 | 层 | 技术 |
@@ -48,7 +52,7 @@ LangChain4j `@Tool` 注解 + 手动工具循环：日历增删查、学习计划
 | 模型 | DeepSeek-V3（聊天，SiliconFlow）、Qwen3-Embedding-0.6B（向量） |
 | 存储 | MySQL 8、Redis 7（对话历史缓存）、Chroma（向量库） |
 | 前端 | Vue 3 + Vite + Element Plus、SSE 流式渲染 |
-| 测试 | JUnit 5 + Mockito 单测、PowerShell 21 条端到端回归 |
+| 测试 | JUnit 5 + Mockito（10 类 77 用例）、Testcontainers、PowerShell 21 条端到端回归、GitHub Actions CI |
 
 ## 快速开始
 
@@ -145,9 +149,12 @@ docker compose up -d --build
 ## 运行测试
 
 ```bash
-# 单元测试（指定类，无需中间件）
+# 全量单元测试（Testcontainers 自动拉起一次性 MySQL 容器，需本机装 Docker）
 cd backend
-mvn test "-Dtest=RuleBasedRouterTest,ToolResultReviewAgentTest,MemoryLogicTest"
+mvn test
+
+# 只跑指定类（纯 Mockito 单测，无需任何中间件）
+mvn test "-Dtest=RuleBasedRouterTest,TokenBudgetServiceTest,SummaryLogicTest"
 
 # 端到端回归（21 条用例，需后端已启动）
 powershell -NoProfile -ExecutionPolicy Bypass -File backend/test-suite.ps1
@@ -162,7 +169,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File backend/test-suite.ps1
 │   ├── Dockerfile                       # 后端多阶段构建（Maven 构建 + JRE 运行）
 │   ├── src/main/java/com/studentagent/studentagent/
 │   │   ├── service/
-│   │   │   ├── ChatService.java        # 对话主链路：路由分流/流式/工具循环/记忆注入
+│   │   │   ├── ChatService.java        # 对话门面：对外编排入口
+│   │   │   ├── chat/                   # 对话协作包：提示词模板/历史+滚动摘要/上下文组装/模型客户端/流式编排/Token 额度
 │   │   │   ├── router/                 # 路由 Agent（规则 + LLM）
 │   │   │   ├── review/                 # 评审 Agent（规则 + LLM）
 │   │   │   ├── CalendarService.java    # 日历/计划/复习排期
@@ -189,4 +197,8 @@ agent:
     enabled: true          # 路由 Agent 总开关，false 时全量走工具路径
   review:
     enabled: true          # 评审 Agent 总开关，false 时结果全部直通
+
+token-budget:
+  enabled: true
+  daily-limit: 200000      # 单用户单日 token 总量（输入+输出）限额
 ```
