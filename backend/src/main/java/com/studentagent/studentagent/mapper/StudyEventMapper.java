@@ -92,33 +92,41 @@ public interface StudyEventMapper {
     @Update("UPDATE study_event SET completed_dates = #{completedDates} WHERE event_id = #{eventId}")
     int updateCompletedDates(@Param("eventId") Long eventId, @Param("completedDates") String completedDates);
 
-    /** 查询用户最近完成的 N 个任务（按日期倒序） */
-    @Select("SELECT * FROM study_event WHERE user_id = #{userId} AND completed = 1 " +
+    /** 查询用户最近完成的 N 个任务（事件级：completed=1 含旧数据整条完成的跨天任务，或跨天有任一打卡） */
+    @Select("SELECT * FROM study_event WHERE user_id = #{userId} AND " +
+            "(completed = 1 OR (end_date > event_date AND completed_dates IS NOT NULL AND completed_dates != '')) " +
             "ORDER BY event_date DESC, create_time DESC LIMIT #{limit}")
     List<StudyEvent> findCompletedByUserId(@Param("userId") Long userId, @Param("limit") int limit);
 
-    /** 累计完成的任务数 */
-    @Select("SELECT COUNT(*) FROM study_event WHERE user_id = #{userId} AND completed = 1")
+    /** 累计完成的任务数（单日任务部分；跨天任务按 completed_dates 打卡口径由服务层展开计次） */
+    @Select("SELECT COUNT(*) FROM study_event WHERE user_id = #{userId} AND completed = 1 " +
+            "AND (end_date IS NULL OR end_date = event_date)")
     int countCompleted(@Param("userId") Long userId);
 
-    /** 某个日期以来完成的任务数（如近7天） */
+    /** 某个日期以来完成的任务数（如近7天，单日任务部分） */
     @Select("SELECT COUNT(*) FROM study_event WHERE user_id = #{userId} AND completed = 1 " +
-            "AND event_date >= #{since}")
+            "AND (end_date IS NULL OR end_date = event_date) AND event_date >= #{since}")
     int countCompletedSince(@Param("userId") Long userId, @Param("since") LocalDate since);
 
-    /** 未完成任务数 */
+    /** 未完成任务数（单日任务部分；跨天任务未完成数由服务层按 findSpanEvents 分类得出） */
     @Select("SELECT COUNT(*) FROM study_event WHERE user_id = #{userId} " +
-            "AND (completed IS NULL OR completed = 0)")
+            "AND (end_date IS NULL OR end_date = event_date) AND (completed IS NULL OR completed = 0)")
     int countPending(@Param("userId") Long userId);
 
-    /** 近N天每日完成任务数（按 event_date 分组），用于学习进度看板柱状图 */
+    /** 跨天任务全部明细（completed + completed_dates），由服务层按口径分类统计 */
+    @Select("SELECT event_id, event_date, end_date, completed, completed_dates FROM study_event " +
+            "WHERE user_id = #{userId} AND end_date > event_date")
+    List<StudyEvent> findSpanEvents(@Param("userId") Long userId);
+
+    /** 近N天每日完成任务数（单日任务部分，按 event_date 分组），用于学习进度看板柱状图 */
     @Select("SELECT event_date AS date, COUNT(*) AS count FROM study_event " +
-            "WHERE user_id = #{userId} AND completed = 1 AND event_date >= #{since} " +
+            "WHERE user_id = #{userId} AND completed = 1 " +
+            "AND (end_date IS NULL OR end_date = event_date) AND event_date >= #{since} " +
             "GROUP BY event_date ORDER BY date ASC")
     List<Map<String, Object>> countCompletedByDay(@Param("userId") Long userId, @Param("since") LocalDate since);
 
-    /** 查询用户所有完成任务的日期（去重、倒序），用于计算连续学习天数 */
+    /** 查询单日任务所有完成日期（去重、倒序）；跨天任务的打卡日期由服务层合并，用于连续学习天数 */
     @Select("SELECT DISTINCT event_date FROM study_event WHERE user_id = #{userId} AND completed = 1 " +
-            "ORDER BY event_date DESC")
+            "AND (end_date IS NULL OR end_date = event_date) ORDER BY event_date DESC")
     List<LocalDate> findCompletedDates(@Param("userId") Long userId);
 }

@@ -1,5 +1,6 @@
 package com.studentagent.studentagent.service.review;
 
+import com.studentagent.studentagent.tool.LearningPlanTool;
 import com.studentagent.studentagent.tool.ToolContextHolder;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.SystemMessage;
@@ -22,7 +23,8 @@ import java.util.regex.Pattern;
  * 评审Agent（阶段2）：工具结果质检员。
  *
  * 在工具循环内对每个工具结果做两级评审：
- * 1. 规则评审（0ms，所有工具必走）：空结果防幻觉、跨用户 userId 比对防泄露、显式错误直通；
+ * 1. 规则评审（0ms，所有工具必走）：空结果防幻觉、跨用户 userId 比对防泄露、显式错误直通、
+ *    计划内容质量（generateStudyPlan 未传知识点大纲时提示模型如实说明"通用框架"）；
  * 2. LLM 评审（约 1~2s，仅 searchKnowledge/webSearch/queryEvents 等只读语义工具）：
  *    判断结果与用户问题是否相关，INVALID 时替换为"不可信"提示。
  *
@@ -35,6 +37,9 @@ public class ToolResultReviewAgent {
 
     /** 结果文本中 userId 字段的两种常见形态：JSON "userId":11 与文本 userId=11 */
     private static final Pattern USER_ID_PATTERN = Pattern.compile("\"?userId\"?\\s*[:=]\\s*(\\d+)");
+
+    /** 工具参数 JSON 中 topics 字段的取值（含转义引号容错），空/缺失视为未传知识点大纲 */
+    private static final Pattern TOPICS_PATTERN = Pattern.compile("\"topics\"\\s*:\\s*\"([^\"]*)\"");
 
     /** 结果截断长度：评审只看开头足够判断相关性，控制 prompt 成本 */
     private static final int RESULT_SNIPPET = 800;
@@ -112,7 +117,24 @@ public class ToolResultReviewAgent {
                 }
             }
         }
+        // R4 计划内容质量：未传知识点大纲时工具只能输出通用模板任务，
+        // 追加提示要求模型如实告知"通用框架"，禁止包装成针对性计划（不拦截：事件已入库，替换会状态不一致）
+        if ("generateStudyPlan".equals(request.name())
+                && !hasTopicsArgument(request.arguments())
+                && LearningPlanTool.containsGenericTasks(result)) {
+            log.info("[review] 计划内容质量提示 tool={} (无topics,通用模板内容)", request.name());
+            return result + "\n\n⚠️ [评审Agent-内容质量] 本次计划任务为通用学习框架（未传入针对性知识点大纲）。"
+                    + "你必须向用户如实说明这是通用框架，禁止将其描述为针对该科目定制的计划；"
+                    + "并建议用户补充学习基础、目标和时间安排后，重新生成个性化计划。";
+        }
         return null;
+    }
+
+    /** 从工具调用参数 JSON 中提取 topics 字段，判断模型是否传入了知识点大纲 */
+    private boolean hasTopicsArgument(String arguments) {
+        if (arguments == null || arguments.isBlank()) return false;
+        Matcher m = TOPICS_PATTERN.matcher(arguments);
+        return m.find() && !m.group(1).isBlank();
     }
 
     /** LLM 评审：仅对语义敏感的只读工具触发，失败一律降级放行 */
