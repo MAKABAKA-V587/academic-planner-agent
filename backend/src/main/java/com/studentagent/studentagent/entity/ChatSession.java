@@ -13,6 +13,8 @@ public class ChatSession {
     private Long userId;
     private String title;
     private Boolean titleLocked;
+    private String summary;
+    private Long summaryUpTo;
     private LocalDateTime createTime;
     private LocalDateTime lastActiveTime;
 }

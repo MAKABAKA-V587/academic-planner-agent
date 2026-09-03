@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS chat_session (
     user_id          BIGINT       NOT NULL                      COMMENT '所属用户ID',
     title            VARCHAR(200) NOT NULL                      COMMENT '会话标题',
     title_locked     TINYINT(1)   NOT NULL DEFAULT 0            COMMENT '标题是否锁定(0=未锁定 1=已锁定)',
+    summary          VARCHAR(2000) DEFAULT NULL                 COMMENT '旧轮次滚动摘要(方案A)',
+    summary_up_to    BIGINT       DEFAULT NULL                  COMMENT '摘要水位线:已覆盖到该message_id',
     create_time      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     last_active_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后活跃时间',
     INDEX idx_user_id (user_id)
@@ -58,7 +60,7 @@ CREATE TABLE IF NOT EXISTS memory_record (
     record_id   BIGINT       PRIMARY KEY AUTO_INCREMENT COMMENT '记录ID',
     user_id     BIGINT       NOT NULL                      COMMENT '所属用户ID',
     memory_text TEXT         NOT NULL                      COMMENT '记忆文本内容',
-    vector_id   VARCHAR(100) NOT NULL UNIQUE               COMMENT 'Chroma文档ID',
+    vector_id   VARCHAR(100) DEFAULT NULL UNIQUE           COMMENT 'Chroma文档ID（先落库后回填，NULL=待补偿任务补写向量）',
     create_time DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '记忆创建时间',
     INDEX idx_user_id (user_id)
 ) ENGINE=InnoDB COMMENT='长时记忆表';

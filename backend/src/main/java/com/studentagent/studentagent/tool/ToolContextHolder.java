@@ -7,9 +7,12 @@ import java.util.Map;
  * 工具调用上下文持有者（LangChain4j 版）。
  *
  * LangChain4j 的 @Tool 方法没有 ToolContext 参数注入，用户身份/会话/联网开关
- * 通过 ThreadLocal 传递。本项目中带工具调用全部走阻塞 chat()（AiServices/手动循环
- * 在同一线程内执行工具），ThreadLocal 不会丢失；流式端点也是先阻塞拿完整回复再分块
- * 模拟流式输出，工具执行仍在调用线程内，同样安全。
+ * 通过 ThreadLocal 传递。
+ *
+ * 注意线程边界：Flux 流式端点由 Controller 以 subscribeOn(boundedElastic) 订阅，
+ * 工具循环运行在 boundedElastic 线程而非 Tomcat 请求线程。因此 set/clear 必须包在
+ * chatWithTools 调用处（见 ChatService.callWithToolContext），在执行工具循环的线程上
+ * 完成，不能在 Controller/Service 入口线程提前 set —— 否则工具读到 userId=null。
  */
 public class ToolContextHolder {
 

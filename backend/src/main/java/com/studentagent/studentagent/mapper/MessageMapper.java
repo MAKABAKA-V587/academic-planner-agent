@@ -72,4 +72,29 @@ public interface MessageMapper {
             "WHERE cs.user_id = #{userId} AND cm.role = 'user' " +
             "ORDER BY cm.create_time DESC")
     List<String> findAllUserMessages(@Param("userId") Long userId);
+
+    /** 当前窗口（最近 rounds 轮）第一条 user 消息的 message_id；不足 rounds 轮返回 null（方案A水位线基准） */
+    @Select("SELECT MIN(t.message_id) FROM (" +
+            "SELECT message_id FROM chat_message " +
+            "WHERE session_id = #{sessionId} AND role = 'user' " +
+            "ORDER BY message_id DESC LIMIT #{rounds}) t")
+    Long getWindowStartMessageId(@Param("sessionId") Long sessionId, @Param("rounds") int rounds);
+
+    /** 统计窗口起点之前、水位线之后滑出窗口的 user 消息轮数（方案A去抖触发） */
+    @Select("SELECT COUNT(*) FROM chat_message " +
+            "WHERE session_id = #{sessionId} AND role = 'user' " +
+            "AND message_id > #{afterId} AND message_id < #{beforeId}")
+    int countUserMessagesBetween(@Param("sessionId") Long sessionId,
+                                 @Param("afterId") long afterId,
+                                 @Param("beforeId") long beforeId);
+
+    /** 取滑出窗口段的 user/assistant 原文（按 message_id 正序，限量），供滚动摘要渲染 */
+    @Select("SELECT * FROM chat_message " +
+            "WHERE session_id = #{sessionId} AND role IN ('user','assistant') " +
+            "AND message_id > #{afterId} AND message_id < #{beforeId} " +
+            "ORDER BY message_id ASC LIMIT #{limit}")
+    List<ChatMessage> findSummarizableBetween(@Param("sessionId") Long sessionId,
+                                              @Param("afterId") long afterId,
+                                              @Param("beforeId") long beforeId,
+                                              @Param("limit") int limit);
 }
