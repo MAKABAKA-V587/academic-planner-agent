@@ -9,6 +9,8 @@ jobs:
   backend-test:
     name: Backend — mvn test（Testcontainers）
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: backend
@@ -47,8 +49,8 @@ jobs:
               echo '```'
             done
           } > /tmp/report.md
-          gh api "repos/MAKABAKA-V587/academic-planner-agent/commits/${{ github.sha }}/comments" \
-            -f "body=$(head -c 60000 /tmp/report.md)"
+          jq -Rs '{body: .[0:60000]}' /tmp/report.md > /tmp/payload.json
+          gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/comments" --input /tmp/payload.json
 
       - name: Upload test reports
         if: always()
