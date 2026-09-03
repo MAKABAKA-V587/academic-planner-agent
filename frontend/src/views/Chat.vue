@@ -63,7 +63,7 @@
         <template v-else>
           <div class="sidebar-collapsed-strip" @click="sidebarCollapsed = false">
             <span class="sidebar-expand-icon">&#187;</span>
-            <span class="sidebar-expand-text">展开</span>
+            <span class="sidebar-expand-text">会话列表</span>
           </div>
         </template>
       </div>
@@ -215,14 +215,16 @@
 
       <!-- 右侧：侧边日历 -->
       <div class="calendar-panel" :class="{ collapsed: calCollapsed }">
-        <div class="cal-toggle" @click="calCollapsed = !calCollapsed">
-          {{ calCollapsed ? '展开日历' : '收起日历' }}
-        </div>
-        <div v-show="!calCollapsed">
+        <div v-if="!calCollapsed" class="cal-body">
           <div class="cal-header">
             <el-button size="small" text @click="prevMonth">&#9664;</el-button>
             <span class="cal-month">{{ calYear }}年{{ calMonth }}月</span>
-            <el-button size="small" text @click="nextMonth">&#9654;</el-button>
+            <div class="sidebar-header-actions">
+              <el-button size="small" text @click="nextMonth">&#9654;</el-button>
+              <el-button text size="small" @click="calCollapsed = true" class="sidebar-collapse-btn">
+                <span style="font-size: 16px;">&#187;</span>
+              </el-button>
+            </div>
           </div>
           <div class="cal-weekdays">
             <span v-for="d in weekDays" :key="d" class="cal-weekday">{{ d }}</span>
@@ -244,6 +246,10 @@
               </div>
             </div>
           </div>
+        </div>
+        <div v-else class="sidebar-collapsed-strip" @click="calCollapsed = false">
+          <span class="sidebar-expand-icon">&#171;</span>
+          <span class="sidebar-expand-text">日历</span>
         </div>
       </div>
     </div>
@@ -318,6 +324,11 @@
         </el-form-item>
       </el-form>
       <template #footer>
+        <el-button v-if="isEditing" type="success" plain
+                   style="margin-right:auto"
+                   @click="markEditingEventDone">
+          {{ editingEventCompleted ? '取消完成' : '完成任务' }}
+        </el-button>
         <el-button @click="eventFormVisible = false">取消</el-button>
         <el-button type="primary" @click="submitEventForm" :disabled="!eventForm.title.trim() || !eventForm.eventDate">
           {{ isEditing ? '保存修改' : '添加' }}
@@ -1300,11 +1311,17 @@ const dayEvents = (day) => filterEvents(calEvents.value, day)
 /** 复习任务识别：标题以「复习·」开头（艾宾浩斯排期工具创建） */
 const isReviewEvent = (ev) => !!ev && (ev.eventType === 'review' || (typeof ev.title === 'string' && ev.title.startsWith('复习·')))
 
-/** 跨天任务（endDate 非空）按天打卡：完成状态看 completedDates 是否含当天；单日任务看 completed */
-const isMultiDayEvent = (ev) => !!ev && !!ev.endDate
+/** 跨天任务（endDate 非空且 ≠ 开始日期）按天打卡：完成状态看 completedDates 是否含当天；单日任务看 completed */
+const isMultiDayEvent = (ev) => !!ev && !!ev.endDate && ev.endDate !== ev.eventDate
 const doneDateList = (ev) => (typeof ev?.completedDates === 'string' && ev.completedDates)
   ? ev.completedDates.split(',').filter(Boolean) : []
-const eventDoneOn = (ev, date) => isMultiDayEvent(ev) ? doneDateList(ev).includes(date) : !!ev?.completed
+const eventDoneOn = (ev, date) => {
+  if (!isMultiDayEvent(ev)) return !!ev?.completed
+  // 旧数据兜底：按天打卡上线前的跨天任务只有 completed=1（无 completed_dates），视为已完成
+  const hasCheckins = String(ev?.completedDates || '').trim() !== ''
+  if (!hasCheckins) return !!ev?.completed
+  return doneDateList(ev).includes(date)
+}
 const todayDateStr = () => {
   const d = new Date()
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
@@ -1375,6 +1392,7 @@ const clearAllEvents = async () => {
 const eventFormVisible = ref(false)
 const isEditing = ref(false)
 const editingEventId = ref(null)
+const editingEventCompleted = ref(false)
 
 const eventForm = ref({
   title: '',
@@ -1415,7 +1433,25 @@ const openEditEvent = (ev) => {
   }
   isEditing.value = true
   editingEventId.value = ev.eventId
+  // 跨天任务按天打卡：编辑弹窗展示的是「今天」的打卡状态（与大日历一致）
+  editingEventCompleted.value = eventDoneOn(ev, todayDateStr())
   eventFormVisible.value = true
+}
+
+// 编辑弹窗内一键完成任务（与大日历一致：可补完成历史任务 / 提前完成未来任务）
+const markEditingEventDone = async () => {
+  const target = !editingEventCompleted.value
+  try {
+    await request.put(`/calendar/${editingEventId.value}/complete`, { completed: target })
+    ElMessage.success(target ? '任务已完成' : '已取消完成')
+    eventFormVisible.value = false
+    dayDetailVisible.value = false
+    await refreshBothCalendars()
+    await loadTodayTasks()
+  } catch (e) {
+    const msg = e?.response?.data?.msg || e?.message || '操作失败'
+    ElMessage.error(typeof msg === 'string' ? msg : '操作失败')
+  }
 }
 
 const submitEventForm = async () => {
@@ -1616,18 +1652,7 @@ onActivated(async () => {
 }
 .chat-page::before { width: 380px; height: 380px; background: #dcebff; top: -150px; right: -120px; }
 .chat-page::after { width: 300px; height: 300px; background: #ddf2ea; bottom: -110px; left: -110px; }
-.top-bar { position: relative; z-index: 10; display: flex; justify-content: space-between; align-items: center; padding: 0 24px; height: 56px; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,0.06); flex-shrink: 0; }
-.title { font-size: 18px; font-weight: 700; color: #303133; letter-spacing: 0.5px; }
-.nav-links { display: flex; align-items: center; gap: 20px; }
-.nav-links a { text-decoration: none; color: #606266; font-size: 16px; }
-.nav-links a:hover, .nav-links a.active { color: #409eff; }
-/* 全局周报生成横幅 */
-.report-gen-banner {
-  position: relative; z-index: 10; display: flex; align-items: center; gap: 8px;
-  padding: 8px 24px; background: #e6f4ff; border-bottom: 1px solid #bcdcff;
-  color: #409eff; font-size: 13px; flex-shrink: 0;
-}
-.report-gen-icon { font-size: 15px; }
+/* top-bar / 周报横幅样式统一由 src/styles/global.css 全局提供 */
 .chat-layout { position: relative; z-index: 1; display: flex; flex: 1; overflow: hidden; }
 
 /* 侧边栏 */
@@ -1761,14 +1786,13 @@ onActivated(async () => {
 
 /* 侧边日历 */
 .calendar-panel { width: 310px; min-width: 200px; max-width: 500px; background: #f4f9ff; border-left: 1px solid #e4e7ed; display: flex; flex-direction: column; flex-shrink: 0; overflow-y: auto; transition: width 0.2s; resize: horizontal; }
-.calendar-panel.collapsed { width: 48px; min-width: 48px; max-width: 48px; resize: none; }
-.cal-toggle { padding: 8px; text-align: center; font-size: 12px; color: #409EFF; cursor: pointer; border-bottom: 1px solid #e4e7ed; }
+.calendar-panel.collapsed { width: 36px; min-width: 36px; max-width: 36px; resize: none; overflow: hidden; }
 .cal-header { display: flex; align-items: center; justify-content: space-between; padding: 8px; }
 .cal-month { font-weight: 600; font-size: 15px; }
 .cal-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: 12px; color: #909399; padding: 4px 0; border-bottom: 1px solid #ebeef5; }
 .cal-weekday { font-weight: 500; }
 .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; padding: 4px; }
-.cal-day { height: 72px; border-radius: 6px; padding: 2px; cursor: pointer; font-size: 12px; display: flex; flex-direction: column; overflow: hidden; transition: background 0.15s; }
+.cal-day { height: 72px; border-radius: 6px; padding: 2px; cursor: pointer; font-size: 12px; display: flex; flex-direction: column; overflow: hidden; transition: background 0.2s ease, border-color 0.2s ease; }
 .cal-day:hover { background: #ecf5ff; }
 .cal-day.today { background: #ecf5ff; border: 1px solid #409EFF; }
 .cal-day.other-month { opacity: 0.35; }

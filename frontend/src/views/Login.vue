@@ -141,7 +141,7 @@ const handleLogin = async () => {
   height: 42px;
   font-size: 15px;
   letter-spacing: 4px;
-  border-radius: 6px;
+  border-radius: var(--app-radius-md, 8px);
 }
 
 .auth-footer {

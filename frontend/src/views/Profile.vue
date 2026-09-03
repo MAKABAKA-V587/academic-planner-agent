@@ -292,7 +292,7 @@
           </el-card>
 
           <!-- 资料预览弹窗：内容独立于悬浮小窗，可同时对比两份不同资料；modal-penetrable 让弹窗开着时仍可操作下层页面（点表格行开小窗） -->
-          <el-dialog v-model="materialPreviewVisible" :title="materialState.dialog.fileName" width="860px" destroy-on-close :modal="false" modal-penetrable>
+          <el-dialog v-model="materialPreviewVisible" :title="materialState.dialog.fileName" width="860px" top="6vh" destroy-on-close :modal="false" modal-penetrable>
             <div class="material-preview" v-loading="materialState.dialog.loading">
               <div v-if="materialState.dialog.html" class="md-content" v-html="materialState.dialog.html"></div>
               <pre v-else class="material-preview-text">{{ materialState.dialog.content }}</pre>
@@ -1163,11 +1163,7 @@ onUnmounted(() => {
 }
 .page-container::before { width: 380px; height: 380px; background: #dcebff; top: -150px; right: -120px; }
 .page-container::after { width: 300px; height: 300px; background: #ddf2ea; bottom: -110px; left: -110px; }
-.top-bar { position: relative; z-index: 1; display: flex; justify-content: space-between; align-items: center; padding: 0 24px; height: 56px; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
-.title { font-size: 18px; font-weight: bold; color: #303133; }
-.nav-links { display: flex; align-items: center; gap: 20px; }
-.nav-links a { text-decoration: none; color: #606266; font-size: 16px; }
-.nav-links a:hover, .nav-links a.active { color: #409eff; }
+/* top-bar 样式统一由 src/styles/global.css 全局提供 */
 .page-content { position: relative; z-index: 1; padding: 24px; padding-bottom: 64px; }
 h2 { margin-bottom: 24px; }
 
@@ -1215,7 +1211,7 @@ h2 { margin-bottom: 24px; }
 /* 资料库 */
 .material-upload { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
 .material-tip { font-size: 12px; color: #c0c4cc; }
-.material-preview { max-height: 72vh; overflow-y: auto; background: #fafbfc; border: 1px solid #ebeef5; border-radius: 8px; padding: 16px 20px; }
+.material-preview { max-height: 68vh; overflow-y: auto; background: #fafbfc; border: 1px solid #ebeef5; border-radius: 8px; padding: 16px 20px 32px; }
 .material-preview-text { white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.7; color: #303133; margin: 0; font-family: 'JetBrains Mono', Consolas, monospace; }
 /* v-html 渲染的 markdown 内容无 scoped 属性，需用 :deep() 让样式生效 */
 .material-preview :deep(.md-content) { font-size: var(--app-font-size, 14px); line-height: 1.8; color: #303133; }
@@ -1254,8 +1250,8 @@ h2 { margin-bottom: 24px; }
 .progress-gauge { flex: 0 0 300px; }
 .progress-gauge .chart-box { height: 240px; }
 .progress-stats { flex: 1; display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
-.stat-card { background: #f5f7fa; border-radius: 10px; padding: 18px 14px; text-align: center; transition: transform 0.15s, box-shadow 0.15s; }
-.stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06); }
+.stat-card { background: #f5f7fa; border-radius: 10px; padding: 18px 14px; text-align: center; transition: transform var(--app-transition, 0.2s ease), box-shadow var(--app-transition, 0.2s ease); }
+.stat-card:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08); }
 .stat-num { font-size: 30px; font-weight: 700; line-height: 1.2; }
 .stat-num.primary { color: #409EFF; }
 .stat-num.success { color: #67C23A; }
@@ -1279,7 +1275,7 @@ h2 { margin-bottom: 24px; }
 .report-sidebar-header { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; font-size: 14px; font-weight: 600; color: #303133; }
 .report-sidebar-empty { font-size: 13px; color: #909399; text-align: center; padding: 20px 0; }
 .report-list { display: flex; flex-direction: column; gap: 6px; }
-.report-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; border: 1px solid #ebeef5; background: #fff; transition: all 0.15s; position: relative; }
+.report-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; border: 1px solid #ebeef5; background: #fff; transition: border-color 0.2s ease, background-color 0.2s ease; position: relative; }
 .report-item:hover { border-color: #409EFF; background: #f5f9ff; }
 .report-item.active { border-color: #409EFF; background: #ecf5ff; }
 .report-item-week { font-size: 14px; font-weight: 600; color: #303133; }

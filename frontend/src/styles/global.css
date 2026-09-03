@@ -1,0 +1,146 @@
+/* ============================================================
+   全局设计规范（Design Tokens + 共享组件）
+   原则：色调系统与各页面既有配色完全一致，只统一规格与交互。
+   色彩来源：主色 #409EFF / 文字 #303133 #606266 #909399 /
+   边框 #edf0f4 #ebeef5 / 面板底 #f5f7fa #f4f9ff。
+   ============================================================ */
+
+:root {
+  /* 圆角规格 */
+  --app-radius-sm: 6px;
+  --app-radius-md: 8px;
+  --app-radius-lg: 12px;
+  --app-radius-full: 999px;
+
+  /* 阴影规格 */
+  --app-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --app-shadow-card-hover: 0 6px 16px rgba(0, 0, 0, 0.08);
+  --app-shadow-float: 0 8px 28px rgba(0, 0, 0, 0.18);
+  --app-shadow-topbar: 0 1px 6px rgba(0, 0, 0, 0.06);
+
+  /* 动效规格 */
+  --app-transition: 0.2s ease;
+
+  /* Element Plus 组件统一规格（不改色板） */
+  --el-border-radius-base: var(--app-radius-md);
+  --el-border-radius-small: var(--app-radius-sm);
+  --el-box-shadow-light: 0 2px 12px rgba(0, 0, 0, 0.08);
+  --el-transition-duration: 0.2s;
+}
+
+/* ---------- 滚动条统一：细、圆角、浅灰蓝 ---------- */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: #c0c4cc transparent;
+}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb { background: #c0c4cc; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #909399; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- 键盘可达性：统一聚焦环 ---------- */
+a:focus-visible,
+button:focus-visible {
+  outline: 2px solid #409eff;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ---------- 共享顶部导航栏（对话/日历/档案页通用） ---------- */
+.top-bar {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 24px;
+  height: 56px;
+  background: #fff;
+  box-shadow: var(--app-shadow-topbar);
+  flex-shrink: 0;
+}
+.top-bar .title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #303133;
+  letter-spacing: 0.5px;
+}
+.nav-links { display: flex; align-items: center; gap: 20px; }
+.nav-links a {
+  position: relative;
+  text-decoration: none;
+  color: #606266;
+  font-size: 16px;
+  padding: 4px 0;
+  transition: color var(--app-transition);
+}
+/* 当前页高亮：兼容手动 .active 与路由自动 .router-link-active（修复对话页无高亮） */
+.nav-links a:hover,
+.nav-links a.active,
+.nav-links a.router-link-active { color: #409eff; }
+/* 底部滑动指示条：hover / 当前页展开 */
+.nav-links a::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -2px;
+  transform: translateX(-50%);
+  width: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: #409eff;
+  transition: width var(--app-transition);
+}
+.nav-links a:hover::after,
+.nav-links a.active::after,
+.nav-links a.router-link-active::after { width: 100%; }
+
+/* ---------- 共享周报生成横幅（对话/日历页通用） ---------- */
+.report-gen-banner {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 24px;
+  background: #e6f4ff;
+  border-bottom: 1px solid #bcdcff;
+  color: #409eff;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.report-gen-icon { font-size: 15px; }
+
+/* ---------- Element Plus 弹窗统一规格 ---------- */
+.el-dialog {
+  border-radius: var(--app-radius-lg);
+  box-shadow: var(--app-shadow-float);
+}
+.el-dialog__header {
+  margin-right: 0;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid #edf0f4;
+}
+.el-dialog__title { font-size: 16px; font-weight: 600; color: #303133; }
+.el-dialog__body { padding: 16px 20px; }
+.el-dialog__footer {
+  padding: 12px 20px 16px;
+  border-top: 1px solid #edf0f4;
+}
+
+/* ---------- 通用按压反馈：按钮按下轻微缩放 ---------- */
+.el-button:not(.is-loading):active { transform: scale(0.97); }
+
+/* ---------- 路由切换过渡（App.vue transition name="page-fade"） ---------- */
+.page-fade-enter-active,
+.page-fade-leave-active { transition: opacity 0.18s ease, transform 0.18s ease; }
+.page-fade-enter-from { opacity: 0; transform: translateY(8px); }
+.page-fade-leave-to { opacity: 0; transform: translateY(-4px); }
+
+/* ---------- 窄屏统一适配：顶部导航 ---------- */
+@media (max-width: 640px) {
+  .top-bar { padding: 0 14px; }
+  .top-bar .title { font-size: 16px; letter-spacing: 0; }
+  .nav-links { gap: 12px; }
+  .nav-links a { font-size: 14px; }
+}

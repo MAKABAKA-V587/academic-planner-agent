@@ -85,8 +85,8 @@ onBeforeUnmount(() => {
   z-index: 3000;
   background: #fff;
   border: 1px solid #e4e7ed;
-  border-radius: 8px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  border-radius: var(--app-radius-lg, 12px);
+  box-shadow: var(--app-shadow-float, 0 8px 28px rgba(0, 0, 0, 0.18));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -137,7 +137,8 @@ onBeforeUnmount(() => {
 .mat-floating-body {
   flex: 1 1 auto;
   overflow: auto;
-  padding: 10px 12px;
+  /* 底部预留缩放手柄空间，避免最后一行内容被遮挡 */
+  padding: 10px 12px 28px;
   user-select: text;
   min-height: 0;
 }

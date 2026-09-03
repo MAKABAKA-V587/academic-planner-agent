@@ -188,11 +188,17 @@ const isReviewEvent = (ev) => !!ev && (ev.eventType === 'review' || (typeof ev.t
 /** 考试任务识别：type=exam */
 const isExamEvent = (ev) => !!ev && ev.eventType === 'exam'
 
-/** 跨天任务（endDate 非空）按天打卡：完成状态看 completedDates 是否含当天；单日任务看 completed */
-const isMultiDayEvent = (ev) => !!ev && !!ev.endDate
+/** 跨天任务（endDate 非空且 ≠ 开始日期）按天打卡：完成状态看 completedDates 是否含当天；单日任务看 completed */
+const isMultiDayEvent = (ev) => !!ev && !!ev.endDate && ev.endDate !== ev.eventDate
 const doneDateList = (ev) => (typeof ev?.completedDates === 'string' && ev.completedDates)
   ? ev.completedDates.split(',').filter(Boolean) : []
-const eventDoneOn = (ev, date) => isMultiDayEvent(ev) ? doneDateList(ev).includes(date) : !!ev?.completed
+const eventDoneOn = (ev, date) => {
+  if (!isMultiDayEvent(ev)) return !!ev?.completed
+  // 旧数据兜底：按天打卡上线前的跨天任务只有 completed=1（无 completed_dates），视为已完成
+  const hasCheckins = String(ev?.completedDates || '').trim() !== ''
+  if (!hasCheckins) return !!ev?.completed
+  return doneDateList(ev).includes(date)
+}
 const todayDateStr = () => {
   const d = new Date()
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
@@ -353,19 +359,7 @@ onMounted(() => {
 }
 .calendar-page::before { width: 380px; height: 380px; background: #dcebff; top: -150px; right: -120px; }
 .calendar-page::after { width: 300px; height: 300px; background: #ddf2ea; bottom: -110px; left: -110px; }
-.top-bar { position: relative; z-index: 10; display: flex; justify-content: space-between; align-items: center; padding: 0 24px; height: 56px; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,0.06); flex-shrink: 0; }
-.title { font-size: 18px; font-weight: 700; color: #303133; letter-spacing: 0.5px; }
-.nav-links { display: flex; align-items: center; gap: 20px; }
-.nav-links a { text-decoration: none; color: #606266; font-size: 16px; }
-.nav-links a:hover, .nav-links a.active { color: #409eff; }
-/* 全局周报生成横幅 */
-.report-gen-banner {
-  position: relative; z-index: 10; display: flex; align-items: center; gap: 8px;
-  padding: 8px 24px; background: #e6f4ff; border-bottom: 1px solid #bcdcff;
-  color: #409eff; font-size: 13px; flex-shrink: 0;
-}
-.report-gen-icon { font-size: 15px; }
-
+/* top-bar / 周报横幅样式统一由 src/styles/global.css 全局提供 */
 /* 大日历 */
 .calendar-fullscreen { position: relative; z-index: 1; flex: 1; display: flex; flex-direction: column; padding: 16px 24px 32px; overflow-y: auto; background: #f4f9ff; }
 .cal-fs-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
@@ -375,8 +369,8 @@ onMounted(() => {
 .cal-fs-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: 13px; color: #909399; padding: 8px 0; border-bottom: 1px solid #ebeef5; }
 .cal-fs-weekday { font-weight: 500; }
 .cal-fs-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; padding: 8px 0; }
-.cal-fs-day { min-height: 90px; border-radius: 8px; padding: 6px; cursor: pointer; background: #fff; border: 1px solid #ebeef5; font-size: 13px; overflow: hidden; transition: background 0.15s; }
-.cal-fs-day:hover { background: #ecf5ff; }
+.cal-fs-day { min-height: 90px; border-radius: 8px; padding: 6px; cursor: pointer; background: #fff; border: 1px solid #ebeef5; font-size: 13px; overflow: hidden; transition: background 0.2s ease, border-color 0.2s ease; }
+.cal-fs-day:hover { background: #ecf5ff; border-color: #bcd9ff; }
 .cal-fs-day.today { background: #ecf5ff; border-color: #409EFF; }
 .cal-fs-day.other-month { opacity: 0.3; background: #f5f5f5; }
 .cal-fs-day-num { font-weight: 600; display: block; margin-bottom: 4px; }

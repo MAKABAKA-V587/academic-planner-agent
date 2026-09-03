@@ -7,9 +7,11 @@
   </div>
   <router-view v-slot="{ Component }">
     <!-- 只缓存对话/档案页保留滚动位置等状态；日历页每次进入重新挂载，避免残留旧页面 -->
-    <keep-alive :include="['ChatPage', 'ProfilePage']">
-      <component :is="Component" />
-    </keep-alive>
+    <transition name="page-fade" mode="out-in">
+      <keep-alive :include="['ChatPage', 'ProfilePage']">
+        <component :is="Component" />
+      </keep-alive>
+    </transition>
   </router-view>
   <!-- 全局资料悬浮小窗：挂在根节点，切换路由不销毁，与档案页预览弹窗共用数据 -->
   <MaterialFloatingWindow />
