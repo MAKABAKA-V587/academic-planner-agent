@@ -53,6 +53,13 @@ class StudentAgentApplicationTests {
     static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
             .withExposedPorts(6379);
 
+    // 与生产 docker-compose.yml 同版本；ChromaEmbeddingStore 在 Bean 构造时即建集合（非懒连接），
+    // 无真实 Chroma 则上下文加载失败，故 CI 也必须起容器
+    @Container
+    static final GenericContainer<?> CHROMA = new GenericContainer<>(DockerImageName.parse("chromadb/chroma:0.4.24"))
+            .withExposedPorts(8000)
+            .waitingFor(Wait.forHttp("/api/v1/heartbeat").forStatusCode(200));
+
     @DynamicPropertySource
     static void overrideProps(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", MYSQL::getJdbcUrl);
@@ -68,6 +75,8 @@ class StudentAgentApplicationTests {
         registry.add("langchain4j.open-ai.streaming-chat-model.api-key", () -> "test-key");
         registry.add("langchain4j.open-ai.embedding-model.api-key", () -> "test-key");
         registry.add("tavily.api-key", () -> "test-key");
+        registry.add("langchain4j.chroma.base-url",
+                () -> "http://" + CHROMA.getHost() + ":" + CHROMA.getMappedPort(8000));
     }
 
     @Autowired
