@@ -21,9 +21,24 @@ jobs:
           java-version: 17
           cache: maven
 
-      # ubuntu-latest 自带 Docker，MySQL/Redis 容器由 Testcontainers 自动拉起
+      # ubuntu-latest 自带 Docker，测试容器镜像预热（限流/网络问题时在此步清晰报错）
+      - name: Warm up test images
+        run: |
+          docker pull mysql:8.0
+          docker pull redis:7-alpine
+          docker pull chromadb/chroma:0.4.24
+
       - name: Run tests
         run: mvn -B test
+
+      # 失败时把 surefire 摘要打进日志，便于远程定位
+      - name: Print surefire reports
+        if: failure()
+        run: |
+          for f in target/surefire-reports/*.txt; do
+            echo "=== $f ==="
+            cat "$f" || true
+          done
 
       - name: Upload test reports
         if: always()
