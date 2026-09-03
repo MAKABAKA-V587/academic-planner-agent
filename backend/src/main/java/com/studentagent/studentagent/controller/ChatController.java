@@ -6,6 +6,7 @@ import com.studentagent.studentagent.mapper.MessageMapper;
 import com.studentagent.studentagent.mapper.SessionMapper;
 import com.studentagent.studentagent.service.CalendarService;
 import com.studentagent.studentagent.service.ChatService;
+import com.studentagent.studentagent.service.chat.TokenBudgetService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
@@ -17,6 +18,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -33,6 +35,20 @@ public class ChatController {
     private final MessageMapper messageMapper;
     private final SessionMapper sessionMapper;
     private final ChatService chatService;
+    private final TokenBudgetService tokenBudgetService;
+
+    /** 当前用户今日 token 用量与限额（成本控制面板/前端展示进度条） */
+    @GetMapping("/chat/token-usage")
+    public Result<Map<String, Object>> tokenUsage(@RequestAttribute Long userId) {
+        long used = Math.max(tokenBudgetService.getTodayUsage(userId), 0);
+        Map<String, Object> data = new java.util.HashMap<>();
+        data.put("date", LocalDate.now().toString());
+        data.put("used", used);
+        data.put("limit", tokenBudgetService.dailyLimit());
+        data.put("enabled", tokenBudgetService.enabled());
+        data.put("exceeded", tokenBudgetService.exceeded(userId));
+        return Result.ok(data);
+    }
 
     @PostMapping("/chat")
     public Result<Map<String, String>> chat(@RequestAttribute Long userId,

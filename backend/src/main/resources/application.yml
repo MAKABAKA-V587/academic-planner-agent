@@ -15,17 +15,17 @@ spring:
       max-file-size: 2MB
       max-request-size: 3MB
 
-  # 数据源配置
+  # 数据源配置（MYSQL_HOST 供容器部署覆盖，本地默认 localhost）
   datasource:
-    url: jdbc:mysql://localhost:3306/student_agent?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
-    username: root
-    password: 123456
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:3306/student_agent?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:123456}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   # Redis 配置
   data:
     redis:
-      host: localhost
+      host: ${REDIS_HOST:localhost}
       port: 6379
 
 # AI 配置（SiliconFlow 硅基流动，OpenAI 兼容，同时支持聊天和Embedding）
@@ -39,20 +39,27 @@ langchain4j:
       base-url: https://api.siliconflow.cn/v1
       model-name: deepseek-ai/DeepSeek-V3
       max-tokens: 8192
+      # 显式超时：工具循环多轮调用整体耗时较长，避免客户端默认超时过短/无限挂死
+      timeout: 90s
+      # 调试：打印真实请求/响应报文（定位工具调用格式问题，稳定后关闭）
+      log-requests: true
+      log-responses: true
     # 流式聊天模型
     streaming-chat-model:
       api-key: ${SILICONFLOW_API_KEY:}
       base-url: https://api.siliconflow.cn/v1
       model-name: deepseek-ai/DeepSeek-V3
       max-tokens: 8192
+      timeout: 90s
     # Embedding 模型
     embedding-model:
       api-key: ${SILICONFLOW_API_KEY:}
       base-url: https://api.siliconflow.cn/v1
       model-name: Qwen/Qwen3-Embedding-0.6B
+      timeout: 30s
   # Chroma 向量库
   chroma:
-    base-url: http://localhost:8000
+    base-url: ${CHROMA_BASE_URL:http://localhost:8000}
     collection-name: student_memory
 
 # MyBatis 配置
@@ -87,4 +94,10 @@ agent:
   review:
     enabled: true            # 总开关，false 时评审全直通（一键回滚 = 现状）
     llm-timeout-ms: 2000     # LLM 评审超时，超时放行原始结果
-    llm-tools: searchKnowledge,webSearch,queryEvents   # 走 LLM 语义评审的只读工具
+    llm-tools: webSearch,queryEvents   # 走 LLM 语义评审的只读工具（searchKnowledge 结果为确定性知识库匹配，LLM 评审纯耗 2s 超时无收益，已移除）
+
+# LLM 成本控制：按用户按日统计 token 用量（Redis Hash，key 保留 48h 自动清理），
+# 超限后当日拒绝新的 LLM 调用（对话/重新生成/标题生成统一拦截）
+token-budget:
+  enabled: true
+  daily-limit: 200000     # 单用户单日 token 总量（输入+输出）限额
