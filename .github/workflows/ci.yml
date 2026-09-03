@@ -49,6 +49,20 @@ jobs:
               echo '```'
             done
           } > /tmp/report.md
+          {
+            echo ""
+            echo "#### docker containers"
+            echo '```'
+            docker ps -a --format '{{.Names}} | {{.Image}} | {{.Status}} | {{.Ports}}' || true
+            echo '```'
+            for c in $(docker ps -a --format '{{.Names}}' | grep -i chroma); do
+              echo ""
+              echo "#### chroma logs: $c"
+              echo '```'
+              docker logs "$c" 2>&1 | tail -40 || true
+              echo '```'
+            done
+          } >> /tmp/report.md
           jq -Rs '{body: .[0:60000]}' /tmp/report.md > /tmp/payload.json
           gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/comments" --input /tmp/payload.json
 
