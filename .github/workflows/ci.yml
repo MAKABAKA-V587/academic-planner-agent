@@ -31,14 +31,24 @@ jobs:
       - name: Run tests
         run: mvn -B test
 
-      # 失败时把 surefire 摘要打进日志，便于远程定位
-      - name: Print surefire reports
+      # 失败时把 surefire 摘要发为 commit comment（匿名可读，便于远程定位）
+      - name: Report failures to commit comment
         if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          for f in target/surefire-reports/*.txt; do
-            echo "=== $f ==="
-            cat "$f" || true
-          done
+          {
+            echo "### Surefire reports (run ${{ github.run_id }})"
+            for f in target/surefire-reports/*.txt; do
+              echo ""
+              echo "#### $f"
+              echo '```'
+              cat "$f" || true
+              echo '```'
+            done
+          } > /tmp/report.md
+          gh api "repos/MAKABAKA-V587/academic-planner-agent/commits/${{ github.sha }}/comments" \
+            -f "body=$(head -c 60000 /tmp/report.md)"
 
       - name: Upload test reports
         if: always()
