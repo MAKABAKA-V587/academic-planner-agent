@@ -1,0 +1,12 @@
+# 构建上下文瘦身 + 防止敏感配置进镜像
+target/
+.mvn/
+mvnw
+mvnw.cmd
+dev/
+eval/
+scripts/
+*.ps1
+*.log
+src/main/resources/application-local.yml
+.idea/

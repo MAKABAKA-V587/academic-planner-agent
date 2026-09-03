@@ -1,5 +1,7 @@
 # Student Agent — AI 学习规划智能体
 
+[![CI](https://github.com/OWNER/student-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/student-agent/actions/workflows/ci.yml)
+
 基于 Spring Boot 3 + LangChain4j 构建的学习助手：支持多轮流式对话、向量长期记忆、日历任务管理、学习计划生成、艾宾浩斯复习排期、学习周报与用户画像。
 
 > 核心亮点：**双 Agent 协作**（路由 Agent + 评审 Agent）+ **真流式优先/工具兜底双通道** + **向量长期记忆**
@@ -119,6 +121,27 @@ npm run dev
 
 浏览器打开 http://localhost:5173，用测试账号登录即可体验。
 
+## Docker 一键部署（可选）
+
+不想配本地环境时，用 Docker Compose 一条命令拉起全栈（MySQL + Chroma + Redis + 后端 + 前端）：
+
+```bash
+# 1. 准备环境变量
+cp .env.example .env    # 填入 SILICONFLOW_API_KEY（必需）、TAVILY_API_KEY（可选）
+
+# 2. 构建并启动
+docker compose up -d --build
+
+# 3. 访问
+#    前端 http://localhost:8081   后端 API http://localhost:8080
+```
+
+说明：
+- 首次启动 MySQL 容器会自动执行 `backend/src/main/resources/sql/init.sql` 建表
+- 本机已占用 3306 时 MySQL 端口默认不映射（容器网络内部互访不受影响）；需要从宿主机连库调试时取消 `docker-compose.yml` 中对应注释
+- 后端 8080 与本地开发后端冲突时，把 `docker-compose.yml` 里的 `"8080:8080"` 改成如 `"8082:8080"`
+- API Key 通过 `.env` 注入容器环境变量，不会打进镜像（`.env` 已被 `.gitignore` 忽略）
+
 ## 运行测试
 
 ```bash
@@ -133,7 +156,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File backend/test-suite.ps1
 ## 项目结构
 
 ```
+├── docker-compose.yml                   # 全栈一键部署（MySQL/Chroma/Redis/后端/前端）
+├── .env.example                         # Docker 部署环境变量模板
 ├── backend/
+│   ├── Dockerfile                       # 后端多阶段构建（Maven 构建 + JRE 运行）
 │   ├── src/main/java/com/studentagent/studentagent/
 │   │   ├── service/
 │   │   │   ├── ChatService.java        # 对话主链路：路由分流/流式/工具循环/记忆注入
@@ -144,9 +170,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File backend/test-suite.ps1
 │   │   │   └── ReportService.java      # 学习周报
 │   │   ├── tool/                       # LangChain4j @Tool 工具集
 │   │   └── config/                     # 模型/向量库配置、启动初始化
+│   ├── scripts/check_kb.py             # knowledge.json 校验脚本
 │   ├── src/main/resources/sql/init.sql # 建表脚本
+│   ├── eval/                           # RAG 评估（golden set + 指标报告）
 │   └── test-suite.ps1                  # 21 条端到端回归测试
 └── frontend/                           # Vue3 前端（SSE 流式渲染）
+    ├── Dockerfile + nginx.conf         # 前端构建 + Nginx 托管（含 SSE 反代）
+    └── src/                            # 视图/组件/路由
 ```
 
 ## 可选配置

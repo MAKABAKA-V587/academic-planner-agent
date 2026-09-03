@@ -1,0 +1,93 @@
+# 全栈一键部署：MySQL + Chroma + Redis + 后端 + 前端
+# 用法：
+#   1. cp .env.example .env 并填入 SILICONFLOW_API_KEY（必需）
+#   2. docker compose up -d --build
+#   3. 浏览器打开 http://localhost:8081（前端），后端 API 在 http://localhost:8080
+services:
+  mysql:
+    image: mysql:8
+    container_name: student-agent-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+      MYSQL_DATABASE: student_agent
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+      # 首次启动自动建表
+      - ./backend/src/main/resources/sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    # 本机已装 MySQL 且占用 3306 时保持注释（容器网络内部访问不受影响）；
+    # 需要从宿主机连库调试时再打开：
+    # ports:
+    #   - "3306:3306"
+
+  chroma:
+    image: chromadb/chroma:0.4.24
+    container_name: student-agent-chroma
+    volumes:
+      - chroma_data:/chroma/chroma
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/api/v1/heartbeat')\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: student-agent-redis
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    container_name: student-agent-backend
+    environment:
+      TZ: Asia/Shanghai
+      # 模型 API Key（.env 提供）
+      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      # 中间件地址（容器网络内服务名互访）
+      MYSQL_HOST: mysql
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+      REDIS_HOST: redis
+      CHROMA_BASE_URL: http://chroma:8000
+    depends_on:
+      mysql:
+        condition: service_healthy
+      chroma:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"   # 与本地 dev 后端同端口，同时运行时改成如 "8082:8080"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: student-agent-frontend
+    depends_on:
+      - backend
+    ports:
+      - "8081:80"
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
+  chroma_data:
+  redis_data:
