@@ -10,7 +10,11 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.time.YearMonth;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -54,21 +58,65 @@ public class LearningPlanTool {
     /** 模板格式变体数：随机切换避免每次回复千篇一律 */
     private static final int TEMPLATE_VARIANTS = 5;
 
-    @Tool("根据科目、考试时间和薄弱知识点，生成包含基础阶段、强化阶段和冲刺阶段的结构化学习计划")
+    @Tool("根据科目、考试时间和薄弱知识点，生成包含基础阶段、强化阶段和冲刺阶段的结构化学习计划。用户指定日期范围或天数时，生成逐日计划（范围内每一天一个任务）")
     public String generateStudyPlan(
             @P("科目名称，如高等数学、数据结构、考研英语等") String subject,
             @P("考试时间，格式 yyyy-MM，如 2025-12") String examTime,
-            @P("薄弱知识点描述，如线性代数、二叉树、阅读理解的掌握程度较弱") String weakPoints) {
+            @P("薄弱知识点描述，如线性代数、二叉树、阅读理解的掌握程度较弱") String weakPoints,
+            @P("计划开始日期，格式 yyyy-MM-dd。用户明确指定了开始日期或日期范围时必传，未指定时传空字符串") String startDate,
+            @P("计划结束日期，格式 yyyy-MM-dd。用户明确指定了结束日期时必传，且必须等于开始日期+天数-1；用户只说了「这个月/到月底」这类窗口时禁止把它当结束日期传，传空字符串") String endDate,
+            @P("用户明确要求的计划天数，如「5天的计划」传 5；用户没提天数时传 0") int planDays,
+            @P("针对该科目设计的递进知识点大纲，用英文分号;分隔，数量尽量等于计划天数，如：安装与环境配置;SQL基础查询;多表连接与子查询;索引与性能优化;事务与锁。无法设计时传空字符串") String topics) {
 
-        log.info("[工具调用] generateStudyPlan: subject={}, examTime={}, weakPoints={}", subject, examTime, weakPoints);
+        log.info("[工具调用] generateStudyPlan: subject={}, examTime={}, weakPoints={}, range={}-{}, planDays={}, topics={}",
+                subject, examTime, weakPoints, startDate, endDate, planDays, topics);
 
         // 保存工具调用消息
         saveToolMessage("tool_call", "generateStudyPlan", subject, examTime, weakPoints);
 
         String result;
-        // 优先模板（秒回），LLM 兜底（仅模板生成失败时使用）
+        String notice = "";
         try {
-            result = generateByTemplate(subject, examTime, weakPoints);
+            LocalDate start = parseDate(startDate);
+            LocalDate end = parseDate(endDate);
+
+            // 兜底防线：用户明确说了 N 天 → 以天数为准，不信任模型自己换算的窗口
+            if (planDays > 0) {
+                int days = Math.min(planDays, 31);
+                if (days != planDays) {
+                    log.warn("planDays={} 超过工具上限31，已截断", planDays);
+                    notice = "（用户要求 " + planDays + " 天，超过工具上限，已按 31 天生成）" + notice;
+                }
+                if (start == null) {
+                    start = LocalDate.now();
+                    notice = "（用户未指定开始日期，已默认从今天开始）" + notice;
+                }
+                LocalDate correctEnd = start.plusDays(days - 1L);
+                if (end == null || correctEnd.isBefore(end)) {
+                    if (end != null) {
+                        log.warn("endDate={} 超出用户要求的天数 {}，已截断至 {}", end, planDays, correctEnd);
+                        notice = "（用户要求 " + planDays + " 天，你传入的结束日期超长，已按天数截断）" + notice;
+                    }
+                    end = correctEnd;
+                }
+            }
+
+            // 用户指定了日期范围 → 生成该范围的逐日计划（不套 12 周三阶段模板）
+            if (start != null && end != null && !end.isBefore(start)
+                    && ChronoUnit.DAYS.between(start, end) <= 31) {
+                result = buildDailyPlan(
+                        subject, examTime, weakPoints, start, end, topics);
+                long actualDays = ChronoUnit.DAYS.between(start, end) + 1;
+                // 自查行：强制模型核对生成结果与用户要求是否一致，禁止直接展示矛盾的计划
+                result = result + "\n\n> ⚠️ 自查：本计划共 " + actualDays + " 天"
+                        + (notice.isEmpty() ? "" : notice)
+                        + "。若与用户要求的天数或日期不符，必须重新调用本工具修正后再向用户展示。";
+            } else {
+                if (start != null || end != null) {
+                    log.warn("日期范围参数无效(start={}, end={})，回退默认模板", startDate, endDate);
+                }
+                result = generateByTemplate(subject, examTime, weakPoints) + notice;
+            }
         } catch (Exception e) {
             log.warn("模板生成学习计划失败: {}", e.getMessage());
             result = "（学习计划生成异常，请重试）";
@@ -203,6 +251,62 @@ public class LearningPlanTool {
             sb.append("\n");
         }
         return tail(sb, weak).toString();
+    }
+
+    /** 格式F：用户指定日期范围的逐日计划 — | M.d | 任务 | 类型 |（正则p4b匹配，每天一行，日期与用户范围严格一致） */
+    private String buildDailyPlan(String subj, String time, String weak, LocalDate start, LocalDate end, String topics) {
+        StringBuilder sb = header(subj, time, weak);
+        long days = ChronoUnit.DAYS.between(start, end) + 1;
+        sb.append("> 本计划覆盖：").append(start).append(" 至 ").append(end).append("，共 ").append(days).append(" 天，每天一个主题任务。\n\n");
+        List<String> topicList = parseTopics(topics);
+        sb.append("| 日期 | 任务 | 类型 |\n|------|------|------|\n");
+        LocalDate d = start;
+        int w = 0;
+        while (!d.isAfter(end)) {
+            // 优先使用模型针对科目设计的知识点大纲；不足的天数回退通用模板
+            String task = w < topicList.size()
+                    ? topicList.get(w)
+                    : WEEK_PLAN[w % WEEK_PLAN.length][0];
+            sb.append("| ").append(md(d)).append(" | ").append(task).append(" | 学习 |\n");
+            d = d.plusDays(1);
+            w++;
+        }
+        sb.append("\n");
+        return tail(sb, weak).toString();
+    }
+
+    /** 解析模型传入的知识点大纲：英文/中文分号分隔，去空白去空项，单条截断到 30 字（保证日历标题可读） */
+    private List<String> parseTopics(String topics) {
+        if (topics == null || topics.isBlank()) return Collections.emptyList();
+        List<String> list = new ArrayList<>();
+        for (String t : topics.split("[;；]")) {
+            String s = t.trim();
+            if (s.isEmpty()) continue;
+            list.add(s.length() > 30 ? s.substring(0, 30) : s);
+        }
+        return list;
+    }
+
+    /**
+     * 判断计划文本是否为通用模板内容（任务列命中 WEEK_PLAN 通用词）。
+     * 供评审 Agent 的内容质量检查项复用，避免词表双份维护。
+     */
+    public static boolean containsGenericTasks(String text) {
+        if (text == null) return false;
+        for (String[] row : WEEK_PLAN) {
+            if (text.contains(row[0])) return true;
+        }
+        return false;
+    }
+
+    /** 宽松解析 yyyy-MM-dd 日期，空/格式错返回 null */
+    private static LocalDate parseDate(String s) {
+        if (s == null || s.isBlank()) return null;
+        try {
+            return LocalDate.parse(s.trim());
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** 计划头部：标题 + 考试时间/薄弱点 */

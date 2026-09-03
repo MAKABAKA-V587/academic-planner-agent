@@ -53,6 +53,7 @@ public class SessionService {
             throw new RuntimeException("会话不存在或无权限");
         }
         messageMapper.deleteBySessionId(sessionId);
+        chatService.clearHistory(sessionId); // 同步清理 Redis 历史与滚动摘要缓存
         sessionMapper.deleteById(sessionId);
     }
 

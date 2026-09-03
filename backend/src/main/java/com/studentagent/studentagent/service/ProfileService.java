@@ -64,6 +64,7 @@ public class ProfileService {
             - 每个标签应唯一，反映用户的具体情况（具体科目、具体目标、具体习惯）
             - 权重代表该特征在用户学习中的突出程度，范围1-5（5=最突出）
             输出格式：「标签名|权重」，一行一个，不要序号，不要额外解释。
+            【直接输出标签行，第一行就必须是标签，严禁任何前言、过渡句、解释或总结。】
             好的标签示例：
             考研备考|5
             数学薄弱|3
@@ -300,8 +301,26 @@ public class ProfileService {
                     .aiMessage().text();
 
             if (result != null && !result.isBlank()) {
-                // 新格式：标签名|权重，每行一个。存为 标签1|5,标签2|3
-                String tags = result.trim().replaceAll("\\s*\n\\s*", ",");
+                // 逐行解析「标签名|权重」，剔除 LLM 可能附带的前言、解释、序号等非标签行，
+                // 一行都不合格式时保留旧标签，绝不把整段话写进 user_tags
+                List<String> parsed = new ArrayList<>();
+                java.util.Set<String> seen = new java.util.HashSet<>();
+                java.util.regex.Pattern linePattern =
+                        java.util.regex.Pattern.compile("^\\s*(?:\\d+[.、)?]?\\s*)?(.{1,20}?)\\s*\\|\\s*([1-5])\\s*$");
+                for (String line : result.trim().split("\\R")) {
+                    java.util.regex.Matcher m = linePattern.matcher(line);
+                    if (m.matches()) {
+                        String name = m.group(1).trim();
+                        if (!name.isEmpty() && seen.add(name)) {
+                            parsed.add(name + "|" + m.group(2));
+                        }
+                    }
+                }
+                if (parsed.isEmpty()) {
+                    log.warn("用户{}标签输出无合格行，保留旧标签，原始输出: {}", userId, result);
+                    return;
+                }
+                String tags = String.join(",", parsed);
                 userMapper.updateTags(userId, tags);
                 log.info("用户{}画像标签更新完成: {}", userId, tags);
             }

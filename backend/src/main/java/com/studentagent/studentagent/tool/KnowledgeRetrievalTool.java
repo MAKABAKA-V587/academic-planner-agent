@@ -89,6 +89,14 @@ public class KnowledgeRetrievalTool {
     }
 
     private String doSearch(String subject, String keyword) {
+        return formatResult(retrieve(subject, keyword, 3, 0.5));
+    }
+
+    /**
+     * 检索核心：内存关键词匹配优先 → 向量检索兜底，返回结构化结果。
+     * topk/threshold 可由评测调试接口覆盖，用于 RAG 参数对比实验；正常工具调用走默认值。
+     */
+    public RetrievalResult retrieve(String subject, String keyword, int topk, double threshold) {
         // 1. 内存关键词匹配（毫秒级）优先 —— 避免每次调用都等远程 embedding
         Map<String, Map<String, String>> knowledgeBase = knowledgeBaseLoader.getKnowledgeBase();
         String normalizedSubject = normalizeSubject(subject);
@@ -100,8 +108,9 @@ public class KnowledgeRetrievalTool {
                 String hit = matchTopic(subjectMap, keyword);
                 if (hit != null) {
                     log.info("内存匹配命中: {}-{}", normalizedSubject, hit);
-                    return "【" + normalizedSubject + " - " + hit + "】\n" + subjectMap.get(hit)
-                            + "\n\n【知识来源】本地知识库「" + normalizedSubject + " - " + hit + "」";
+                    return new RetrievalResult("memory",
+                            List.of(new Candidate(normalizedSubject + " - " + hit, subjectMap.get(hit), 1.0)),
+                            null);
                 }
             }
         }
@@ -112,8 +121,10 @@ public class KnowledgeRetrievalTool {
                 String hit = matchTopic(subjectEntry.getValue(), keyword);
                 if (hit != null) {
                     log.info("跨科目内存匹配: {}-{}", subjectEntry.getKey(), hit);
-                    return "【" + subjectEntry.getKey() + " - " + hit + "】\n" + subjectEntry.getValue().get(hit)
-                            + "\n\n【知识来源】本地知识库「" + subjectEntry.getKey() + " - " + hit + "」";
+                    return new RetrievalResult("memory",
+                            List.of(new Candidate(subjectEntry.getKey() + " - " + hit,
+                                    subjectEntry.getValue().get(hit), 1.0)),
+                            null);
                 }
             }
         }
@@ -128,7 +139,7 @@ public class KnowledgeRetrievalTool {
                     Filter filter = MetadataFilterBuilder.metadataKey("type").isEqualTo("knowledge");
                     return embeddingStore.search(EmbeddingSearchRequest.builder()
                                     .queryEmbedding(queryEmbedding)
-                                    .maxResults(3)
+                                    .maxResults(topk)
                                     .filter(filter)
                                     .build())
                             .matches();
@@ -138,40 +149,62 @@ public class KnowledgeRetrievalTool {
                 }
             }).get(3, TimeUnit.SECONDS);
 
-            if (!results.isEmpty() && results.get(0).score() != null && results.get(0).score() >= 0.5) {
-                EmbeddingMatch<TextSegment> best = results.get(0);
-                TextSegment segment = best.embedded();
-                String bestSubject = segment != null ? segment.metadata().getString("subject") : null;
-                String bestTopic = segment != null ? segment.metadata().getString("topic") : null;
-                String prefix = (bestSubject != null && bestTopic != null)
-                        ? "【" + bestSubject + " - " + bestTopic + "】\n"
-                        : "";
-                log.info("向量检索命中: {} - {}, score={}", bestSubject, bestTopic, best.score());
-                String sourceName = (bestSubject != null ? bestSubject : "知识库")
-                        + (bestTopic != null ? " - " + bestTopic : "");
-                String text = segment != null ? segment.text() : "";
-                return prefix + text + "\n\n【知识来源】本地知识库「" + sourceName + "」";
+            if (!results.isEmpty() && results.get(0).score() != null && results.get(0).score() >= threshold) {
+                List<Candidate> candidates = results.stream()
+                        .filter(m -> m.score() != null && m.embedded() != null)
+                        .map(m -> {
+                            TextSegment segment = m.embedded();
+                            String s = segment.metadata().getString("subject");
+                            String t = segment.metadata().getString("topic");
+                            String sourceName = (s != null ? s : "知识库") + (t != null ? " - " + t : "");
+                            return new Candidate(sourceName, segment.text(), m.score());
+                        })
+                        .toList();
+                if (!candidates.isEmpty()) {
+                    log.info("向量检索命中: {}, score={}", candidates.get(0).source(), candidates.get(0).score());
+                    return new RetrievalResult("vector", candidates, null);
+                }
             }
         } catch (Exception e) {
             log.warn("向量检索超时或失败，跳过: {}", e.getMessage());
         }
 
         // 3. 未匹配到：返回通用建议
-        return """
+        String missText = """
                 【未匹配到具体考点】
-                
+
                 关于「%s - %s」，本地知识库暂未收录该知识点的详细信息。
-                
+
                 通用学习建议：
                 1. 先到中国大学MOOC或B站搜索相关课程视频，建立整体认知。
                 2. 查阅《%s》经典教材对应章节，精读概念和例题。
                 3. 在力扣/牛客网找相关题目练习，巩固理解。
                 4. 整理思维导图，梳理该知识点的核心概念和解题套路。
                 5. 如需要更详细的资料，建议搜索相关论文或技术博客。
-                
+
                 如需其他相关科目或考点的帮助，可以继续向我提问。"""
                 .formatted(subject != null ? subject : "未知", keyword != null ? keyword : "未知",
                            getTextbookName(subject));
+        return new RetrievalResult("miss", List.of(), missText);
+    }
+
+    /** 单条检索候选（来源 + 文本 + 相似度得分；内存匹配固定 1.0） */
+    public record Candidate(String source, String text, double score) {
+    }
+
+    /**
+     * 检索结果结构化载体（评测调试接口用；tool 正常链路只消费格式化文本）。
+     * retriever ∈ memory(关键词命中)/vector(向量兜底)/miss(未匹配)；candidates 按 score 降序。
+     */
+    public record RetrievalResult(String retriever, List<Candidate> candidates, String missText) {
+    }
+
+    /** 结构化结果 → 工具返回文本（带【知识来源】标注） */
+    private String formatResult(RetrievalResult r) {
+        if ("miss".equals(r.retriever())) return r.missText();
+        Candidate best = r.candidates().get(0);
+        return "【" + best.source() + "】\n" + best.text()
+                + "\n\n【知识来源】本地知识库「" + best.source() + "」";
     }
 
     /** 科目别名归一化：映射到知识库标准科目名 */

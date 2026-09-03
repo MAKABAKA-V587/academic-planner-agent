@@ -21,6 +21,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Async;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -176,34 +177,33 @@ public class MemoryExtractService {
 
         List<String> newItems;
         if (!skipDedup) {
-            // 2. 批量去重：一次性查回用户全部已有记忆，内存比对
-            List<EmbeddingMatch<TextSegment>> existingMatches;
+            // 2a. 文本精确去重（兜底：覆盖完全相同文本与无向量记忆）
+            java.util.Set<String> existingTexts = memoryRecordMapper.findByUserId(userId).stream()
+                    .map(MemoryRecord::getMemoryText)
+                    .collect(Collectors.toSet());
+
+            // 2b. 向量语义去重：embedAll 一次嵌入全部候选，再逐条对 Chroma 做 top-1 检索，
+            //     用向量余弦分数判重（原文本分词余弦对中文失效——整句无空格等价于精确匹配才判重）
+            List<Embedding> candEmbeddings;
             try {
-                Embedding queryEmbedding = embeddingModel.embed(
-                        candidates.get(0) + " " + candidates.get(candidates.size() - 1)).content();
-                Filter filter = Filter.and(
-                        MetadataFilterBuilder.metadataKey("userId").isEqualTo(String.valueOf(userId)),
-                        MetadataFilterBuilder.metadataKey("type").isEqualTo("extracted"));
-                existingMatches = embeddingStore.search(EmbeddingSearchRequest.builder()
-                                .queryEmbedding(queryEmbedding)
-                                .maxResults(50)
-                                .filter(filter)
-                                .build())
-                        .matches();
+                List<TextSegment> candSegments = candidates.stream()
+                        .map(TextSegment::from).collect(Collectors.toList());
+                candEmbeddings = embeddingModel.embedAll(candSegments).content();
             } catch (Exception e) {
-                log.warn("批量去重检索失败，按非重复处理: {}", e.getMessage());
-                existingMatches = List.of();
+                log.warn("候选记忆嵌入失败，降级为仅文本精确去重: {}", e.getMessage());
+                candEmbeddings = List.of();
             }
 
             newItems = new ArrayList<>();
-            for (String candidate : candidates) {
-                double best = existingMatches.stream()
-                        .filter(m -> m.embedded() != null)
-                        .mapToDouble(m -> cosineSim(m.embedded().text(), candidate))
-                        .max()
-                        .orElse(0.0);
-                if (best >= DEDUP_THRESHOLD) {
-                    log.debug("跳过重复记忆: {}", candidate);
+            for (int i = 0; i < candidates.size(); i++) {
+                String candidate = candidates.get(i);
+                if (existingTexts.contains(candidate)) {
+                    log.debug("跳过完全重复记忆: {}", candidate);
+                    continue;
+                }
+                if (!candEmbeddings.isEmpty()
+                        && top1Score(candEmbeddings.get(i), userId) >= DEDUP_THRESHOLD) {
+                    log.debug("向量判重跳过记忆: {}", candidate);
                     continue;
                 }
                 newItems.add(candidate);
@@ -261,54 +261,112 @@ public class MemoryExtractService {
             log.warn("记忆冲突覆盖处理失败: {}", e.getMessage());
         }
 
-        // 4. 批量写入 Chroma（先 embedAll 一次性嵌入，再按自定义 docId 写入）
+        // 4. MySQL 先行落库（vector_id 置空），Chroma 写成功后回填；
+        //    Chroma 失败不丢记忆，由补偿任务按 vector_id IS NULL 补写
         try {
-            List<String> ids = new ArrayList<>();
-            List<TextSegment> segments = new ArrayList<>();
             List<MemoryRecord> records = new ArrayList<>();
-            for (int i = 0; i < newItems.size(); i++) {
-                String text = newItems.get(i);
-                String docId = UUID.randomUUID().toString();
-                ids.add(docId);
-                segments.add(TextSegment.from(text, Metadata.from(Map.of(
-                        "userId", String.valueOf(userId), "type", "extracted"))));
-
+            for (String text : newItems) {
                 MemoryRecord record = new MemoryRecord();
                 record.setUserId(userId);
                 record.setMemoryText(text);
-                record.setVectorId(docId);
                 records.add(record);
             }
-            List<Embedding> embeddings = embeddingModel.embedAll(segments).content();
+            memoryRecordMapper.batchInsert(records);
 
-            embeddingStore.addAll(ids, embeddings, segments);
-            log.info("Chroma批量写入{}条成功", ids.size());
-
-            // 5. 批量写 MySQL
-            if (!records.isEmpty()) {
-                memoryRecordMapper.batchInsert(records);
+            // 5. Chroma 批量写入：embedAll 一次嵌入；createTime 进 metadata，
+            //    召回端直接从 metadata 做时间标注，省掉每请求的 MySQL 全表扫描
+            List<String> ids = new ArrayList<>();
+            List<TextSegment> segments = new ArrayList<>();
+            String createTimeMs = String.valueOf(System.currentTimeMillis());
+            for (String text : newItems) {
+                String docId = UUID.randomUUID().toString();
+                ids.add(docId);
+                segments.add(TextSegment.from(text, Metadata.from(Map.of(
+                        "userId", String.valueOf(userId), "type", "extracted",
+                        "createTime", createTimeMs))));
+            }
+            try {
+                List<Embedding> embeddings = embeddingModel.embedAll(segments).content();
+                embeddingStore.addAll(ids, embeddings, segments);
+                for (int i = 0; i < records.size(); i++) {
+                    memoryRecordMapper.updateVectorId(records.get(i).getRecordId(), ids.get(i));
+                }
+                log.info("记忆写入完成：MySQL {}条 + Chroma {}条", records.size(), ids.size());
+            } catch (Exception ve) {
+                log.error("Chroma写入失败，等待补偿任务补写: {}", ve.getMessage());
             }
             return newItems.size();
         } catch (Exception e) {
-            log.error("Chroma批量写入失败: {}", e.getMessage());
+            log.error("记忆写入失败: {}", e.getMessage());
             return 0;
         }
     }
 
-    /** 简单的文本相似度比对（避免频繁调 Chroma） */
-    private double cosineSim(String a, String b) {
-        if (a == null || b == null || a.isEmpty() || b.isEmpty()) return 0.0;
-        java.util.Set<String> setA = new java.util.HashSet<>();
-        java.util.Set<String> setB = new java.util.HashSet<>();
-        for (String word : a.split("\\s+")) { setA.add(word); }
-        for (String word : b.split("\\s+")) { setB.add(word); }
-        java.util.Set<String> intersection = new java.util.HashSet<>(setA);
-        intersection.retainAll(setB);
-        double dot = intersection.size();
-        double normA = Math.sqrt(setA.size());
-        double normB = Math.sqrt(setB.size());
-        if (normA == 0 || normB == 0) return 0.0;
-        return dot / (normA * normB);
+    /**
+     * 对单条候选记忆做 Chroma top-1 检索，返回与该用户已有提取记忆的最高余弦分数。
+     * 检索失败按 0 分处理（宁漏判重不丢记忆）。
+     */
+    private double top1Score(Embedding queryEmb, Long userId) {
+        try {
+            Filter filter = Filter.and(
+                    MetadataFilterBuilder.metadataKey("userId").isEqualTo(String.valueOf(userId)),
+                    MetadataFilterBuilder.metadataKey("type").isEqualTo("extracted"));
+            List<EmbeddingMatch<TextSegment>> matches = embeddingStore.search(
+                            EmbeddingSearchRequest.builder()
+                                    .queryEmbedding(queryEmb)
+                                    .maxResults(1)
+                                    .filter(filter)
+                                    .build())
+                    .matches();
+            return matches.isEmpty() ? 0.0 : matches.get(0).score();
+        } catch (Exception e) {
+            log.warn("向量去重检索失败，该条按非重复处理: {}", e.getMessage());
+            return 0.0;
+        }
+    }
+
+    /**
+     * 补偿任务：为 vector_id 为空的记忆补写向量（Chroma 写入失败的兜底）。
+     * 每分钟最多补 50 条，避免瞬时打满嵌入 API。
+     */
+    @Scheduled(fixedDelay = 60000, initialDelay = 60000)
+    public void compensateNullVectorMemories() {
+        List<MemoryRecord> pendings = memoryRecordMapper.findByNullVectorId(50);
+        if (pendings.isEmpty()) {
+            return;
+        }
+        log.info("补偿任务：发现{}条无向量记忆，开始补写", pendings.size());
+        List<String> ids = new ArrayList<>();
+        List<TextSegment> segments = new ArrayList<>();
+        List<MemoryRecord> valid = new ArrayList<>();
+        for (MemoryRecord r : pendings) {
+            if (r.getCreateTime() == null) continue; // 无时间无法构造完整 metadata，跳过待人工处理
+            String docId = UUID.randomUUID().toString();
+            String createTimeMs = String.valueOf(
+                    r.getCreateTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+            ids.add(docId);
+            valid.add(r);
+            segments.add(TextSegment.from(r.getMemoryText(), Metadata.from(Map.of(
+                    "userId", String.valueOf(r.getUserId()), "type", "extracted",
+                    "createTime", createTimeMs))));
+        }
+        if (valid.isEmpty()) {
+            return;
+        }
+        try {
+            List<Embedding> embeddings = embeddingModel.embedAll(segments).content();
+            embeddingStore.addAll(ids, embeddings, segments);
+            for (int i = 0; i < valid.size(); i++) {
+                memoryRecordMapper.updateVectorId(valid.get(i).getRecordId(), ids.get(i));
+            }
+            log.info("补偿任务完成：补写{}条记忆向量", valid.size());
+        } catch (Exception e) {
+            if (e.getMessage() != null && (e.getMessage().contains("429") || e.getMessage().contains("rate limit"))) {
+                log.warn("补偿任务触发嵌入限流，下轮重试");
+                return;
+            }
+            log.error("补偿任务补写失败，下轮重试: {}", e.getMessage());
+        }
     }
 
     /**

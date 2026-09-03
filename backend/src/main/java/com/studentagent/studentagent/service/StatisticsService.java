@@ -2,6 +2,7 @@ package com.studentagent.studentagent.service;
 
 import com.studentagent.studentagent.dto.StatisticsVO;
 import com.studentagent.studentagent.entity.MemoryRecord;
+import com.studentagent.studentagent.entity.StudyEvent;
 import com.studentagent.studentagent.mapper.MemoryRecordMapper;
 import com.studentagent.studentagent.mapper.MessageMapper;
 import com.studentagent.studentagent.mapper.StudyEventMapper;
@@ -74,23 +75,44 @@ public class StatisticsService {
     }
 
     /**
-     * 学习进度总览 — 基于日历任务完成情况（completed 字段，数据事实，非 LLM 提取）
+     * 学习进度总览 — 基于日历任务完成情况（数据事实，非 LLM 提取）
+     * 口径：单日任务按 completed 字段；跨天任务有打卡记录按打卡天数计次，
+     * 无打卡的旧数据（completed=1，按天打卡上线前整条完成）计 1 次，其余计未完成。
      * 返回：累计完成/总任务/未完成/完成率/本周完成/连续学习天数
      */
     private Map<String, Object> buildProgressOverview(Long userId) {
-        int completed = studyEventMapper.countCompleted(userId);
-        int pending = studyEventMapper.countPending(userId);
+        // 跨天任务分类：有打卡 → 每次打卡计一次完成并收集日期；无打卡但 completed=1 → 旧数据整条完成计 1；否则未完成
+        List<StudyEvent> spanEvents = studyEventMapper.findSpanEvents(userId);
+        int spanDone = 0;
+        int spanPending = 0;
+        List<LocalDate> spanDoneDates = new ArrayList<>();
+        for (StudyEvent ev : spanEvents) {
+            List<LocalDate> days = parseCheckinDates(ev.getCompletedDates());
+            if (!days.isEmpty()) {
+                spanDone += days.size();
+                spanDoneDates.addAll(days);
+            } else if (Boolean.TRUE.equals(ev.getCompleted())) {
+                spanDone += 1; // 旧数据：按天打卡上线前整条完成，无具体日期
+            } else {
+                spanPending += 1;
+            }
+        }
+
+        int completed = studyEventMapper.countCompleted(userId) + spanDone;
+        int pending = studyEventMapper.countPending(userId) + spanPending;
         int total = completed + pending;
         int rate = total == 0 ? 0 : Math.round(completed * 100f / total);
 
         // 本周完成：从本周一（周一为一周起点）算起
         LocalDate today = LocalDate.now();
         LocalDate weekStart = today.minusDays(today.getDayOfWeek().getValue() - DayOfWeek.MONDAY.getValue());
-        int thisWeek = studyEventMapper.countCompletedSince(userId, weekStart);
+        int thisWeek = studyEventMapper.countCompletedSince(userId, weekStart) +
+                (int) spanDoneDates.stream().filter(d -> !d.isBefore(weekStart)).count();
 
-        // 连续学习天数：有完成任务的连续日期数；今天尚未完成则从昨天起算（不视为中断）
-        List<LocalDate> doneDates = studyEventMapper.findCompletedDates(userId);
-        Set<LocalDate> doneSet = new HashSet<>(doneDates);
+        // 连续学习天数：有完成动作的连续日期数（单日完成 + 跨天打卡合并去重）；
+        // 今天尚未完成则从昨天起算（不视为中断）
+        Set<LocalDate> doneSet = new HashSet<>(studyEventMapper.findCompletedDates(userId));
+        doneSet.addAll(spanDoneDates);
         LocalDate cursor = doneSet.contains(today) ? today : today.minusDays(1);
         int streak = 0;
         while (doneSet.contains(cursor)) {
@@ -109,12 +131,48 @@ public class StatisticsService {
     }
 
     /**
-     * 每日完成趋势（近14天）— 每天勾选完成任务的数量
+     * 每日完成趋势（近14天）— 每天的完成动作数
+     * 单日任务按 event_date 分组；跨天任务的每次打卡按其打卡日期计入当天
      */
     private List<Map<String, Object>> buildCompletionTrend(Long userId) {
         LocalDate since = LocalDate.now().minusDays(COMPLETION_TREND_DAYS - 1L);
-        List<Map<String, Object>> raw = studyEventMapper.countCompletedByDay(userId, since);
+        Map<LocalDate, Integer> byDay = new LinkedHashMap<>();
+        for (Map<String, Object> row : studyEventMapper.countCompletedByDay(userId, since)) {
+            LocalDate d = LocalDate.parse(String.valueOf(row.get("date")));
+            byDay.merge(d, ((Number) row.get("count")).intValue(), Integer::sum);
+        }
+        for (StudyEvent ev : studyEventMapper.findSpanEvents(userId)) {
+            for (LocalDate d : parseCheckinDates(ev.getCompletedDates())) {
+                if (!d.isBefore(since)) {
+                    byDay.merge(d, 1, Integer::sum);
+                }
+            }
+        }
+        List<Map<String, Object>> raw = byDay.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .map(e -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("date", e.getKey());
+                    m.put("count", e.getValue());
+                    return m;
+                })
+                .collect(Collectors.toList());
         return fillDateGap(raw, COMPLETION_TREND_DAYS);
+    }
+
+    /** 解析跨天任务打卡日期串（逗号分隔 yyyy-MM-dd），非法片段跳过 */
+    private List<LocalDate> parseCheckinDates(String completedDates) {
+        List<LocalDate> dates = new ArrayList<>();
+        if (completedDates == null || completedDates.isBlank()) {
+            return dates;
+        }
+        for (String part : completedDates.split(",")) {
+            try {
+                dates.add(LocalDate.parse(part.trim()));
+            } catch (Exception ignored) {
+            }
+        }
+        return dates;
     }
 
     /**

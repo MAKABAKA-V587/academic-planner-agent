@@ -41,6 +41,12 @@ public interface MemoryRecordMapper {
             "</script>")
     int deleteByIds(@Param("ids") List<Long> ids);
 
+    @Update("UPDATE memory_record SET vector_id = #{vectorId} WHERE record_id = #{recordId}")
+    int updateVectorId(@Param("recordId") Long recordId, @Param("vectorId") String vectorId);
+
+    @Select("SELECT * FROM memory_record WHERE vector_id IS NULL ORDER BY record_id ASC LIMIT #{limit}")
+    List<MemoryRecord> findByNullVectorId(@Param("limit") int limit);
+
     /** 统计指定用户近N天的记忆增长（按日期分组） */
     @Select("SELECT DATE(create_time) AS date, COUNT(*) AS count FROM memory_record " +
             "WHERE user_id = #{userId} AND create_time >= DATE_SUB(NOW(), INTERVAL #{days} DAY) " +

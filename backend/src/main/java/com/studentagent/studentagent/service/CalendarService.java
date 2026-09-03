@@ -62,6 +62,7 @@ public class CalendarService {
             6. 【重要】识别日偏移格式：D1=今天(即%s), D2=明天, D3=后天...D{n}=今天+(n-1)天。
                例如表格中"D3"对应日期为今天+2天。将D{n}转换为yyyy-MM-dd格式。
             7. 【重要】全局日期继承：当文本整体只有一个明确日期（如标题"今日计划（2026-08-06）""推荐学习计划（2026-08-06）""8月6日安排"）时，用它作为所有任务的默认日期；任务只带时间段（如"9:00-10:30：复习链表核心操作""上午：背单词"）也提取为当天事件，标题去掉时间段前缀。文本含"今日/今天"字样且无其他日期时，默认日期为今天。禁止编造：只有整个文本既无日期也无"今日/今天"字样时才返回[]。
+            8. 【重要】计划表格（| 日期 | 学习内容 | 具体任务 |）每个日期行只提取1条事件：标题取"学习内容/标题"列，同一天的编号子任务用分号拼进同一条标题；禁止把编号子任务拆成多条，也禁止把"学习内容"列单独重复提取一条。
             
             JSON字段：
             - title: 完整任务描述
@@ -511,30 +512,38 @@ public class CalendarService {
             events.add(buildEvent(userId, title, start, end, "task", pickColor(title, TASK_COLORS), desc));
             log.info("p4匹配: title={}, {}.{} — {}.{}", title, startMonth, startDay, endMonth, endDay);
         }
-        // 模式4b：表格单日行（AI 常见输出格式） — | 日期 | 标题 | 类型 |
-        // 如：| 8.5 | Python语法精练 | 学习任务 |
-        Pattern p4b = Pattern.compile(
-                "\\|\\s*" +
-                "(\\d{1,2})\\s*[.月/]\\s*(\\d{1,2})\\s*[日]?" +
-                "\\s*\\|\\s*" +
-                "([^|\\n]{2,80})" +                           // group 3: 标题（贪婪，遇 | 或换行即停）
-                "\\s*\\|\\s*" +
-                "([^|\\n]{0,30})" +                           // group 4: 类型
-                "\\s*\\|"
-        );
-        Matcher m4b = p4b.matcher(text);
-        while (m4b.find()) {
-            String title = m4b.group(3).trim();
-            if (title.length() < 2) continue;
-            if (isNoiseTitle(title)) continue;
-            title = title.replaceAll("<[^>]+>", "").trim();
-            int month = Integer.parseInt(m4b.group(1));
-            int day = Integer.parseInt(m4b.group(2));
+        // 模式4b：表格单日行（AI 常见输出格式） — 逐行解析，兼容三种列布局：
+        //   | 8.5 | Python语法精练 | 学习任务 |                     （日期|标题|类型，标准工具格式）
+        //   | 9.3 | 函数定义与性质 | 1.理解三要素<br>2.练习5道题 |   （日期|学习内容|具体任务，第三列长文本→并入描述）
+        //   | 8.5 | Python语法精练 |                                （两列）
+        // 注：旧正则对第三列限长30字，长任务列（30-40字）整行失配，故改为按行 split 解析
+        Pattern p4bDate = Pattern.compile("(\\d{1,2})\\s*[.月/]\\s*(\\d{1,2})\\s*[日]?");
+        for (String row : text.split("\n")) {
+            String t = row.trim();
+            if (!t.startsWith("|")) continue;
+            String[] cells = t.split("\\|", -1);
+            if (cells.length < 3) continue;
+            Matcher dm = p4bDate.matcher(cells[1].trim());
+            if (!dm.matches()) continue;   // 第一列必须是纯日期（9.1-9.5 这类区间行由 p4 处理）
+            int month = Integer.parseInt(dm.group(1));
+            int day = Integer.parseInt(dm.group(2));
+            String title = cleanTableCell(cells[2]);
+            if (title.length() < 2 || isNoiseTitle(title)) continue;
+            // 第三列：带编号或长文本 = 具体任务 → 并入描述；短文本 = 类型标签（只影响配色）
+            String desc = null;
+            String typeLabel = "";
+            if (cells.length >= 4) {
+                String third = cleanTableCell(cells[3]);
+                if (third.length() > 8 || third.matches(".*\\d+[.、].*")) {
+                    desc = third;
+                } else {
+                    typeLabel = third;
+                }
+            }
             LocalDate date = resolveDate(month, day);
-            String typeLabel = m4b.group(4).trim();
             List<String> palette = "plan".equals(typeLabel) ? PLAN_COLORS : TASK_COLORS;
-            events.add(buildEvent(userId, title, date, date, "task", pickColor(title, palette)));
-            log.info("p4b单日表格匹配: title={}, date={}.{}", title, month, day);
+            events.add(buildEvent(userId, title, date, date, "task", pickColor(title, palette), desc));
+            log.info("p4b单日表格匹配: title={}, date={}.{}, desc={}", title, month, day, desc != null ? "并入描述" : "无");
         }
 
         // 模式7：学习计划日偏移表格 — | D{n} | 内容 | 内容 | ... |
@@ -1377,7 +1386,8 @@ public class CalendarService {
         if (existing == null || !existing.getUserId().equals(userId)) {
             throw new RuntimeException("事件不存在或无权限");
         }
-        if (existing.getEndDate() != null) {
+        // endDate 与 eventDate 相同视为单日任务（部分数据带同日 endDate，不能走跨天打卡）
+        if (existing.getEndDate() != null && !existing.getEndDate().equals(existing.getEventDate())) {
             // 跨天任务：按天打卡，勾选只影响当天，不牵连其他日期（修复反馈47：划掉今日任务导致长期任务全被标记完成）
             LocalDate today = LocalDate.now();
             Set<String> dates = parseCompletedDates(existing.getCompletedDates());
@@ -1411,6 +1421,17 @@ public class CalendarService {
             Collections.addAll(dates, raw.split(","));
         }
         return dates;
+    }
+
+    /** 清洗表格单元格：换行标记→分号、去HTML标签与markdown装饰符 */
+    private String cleanTableCell(String cell) {
+        if (cell == null) return "";
+        return cell.trim()
+                .replaceAll("(?i)<br\\s*/?>", "；")
+                .replaceAll("<[^>]+>", "")
+                .replaceAll("[*`#]+", "")
+                .replaceAll("^[\\s•·\\-]+", "")
+                .trim();
     }
 
     private StudyEvent buildEvent(Long userId, String title, LocalDate start, LocalDate end,

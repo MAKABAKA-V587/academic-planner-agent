@@ -5,6 +5,7 @@ import com.studentagent.studentagent.service.CalendarService;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
@@ -15,6 +16,7 @@ import java.util.stream.Collectors;
 /**
  * 日历管理工具 — AI 可通过自然语言操作用户的学习日历。
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class CalendarTool {
@@ -60,18 +62,43 @@ public class CalendarTool {
         Long userId = ToolContextHolder.userId();
         if (userId == null) return "无法获取用户信息";
 
+        // 参数防御：日期格式校验失败时返回明确错误（模型可据此修正重试），不抛异常
+        LocalDate start;
+        LocalDate end;
+        try {
+            start = LocalDate.parse(startDate.trim());
+        } catch (Exception e) {
+            log.warn("addEvent 开始日期格式非法: {}", startDate);
+            return "错误：开始日期「" + startDate + "」格式不合法，必须为 yyyy-MM-dd（如 2026-09-05），请修正后重新调用";
+        }
+        try {
+            end = (endDate != null && !endDate.isBlank()) ? LocalDate.parse(endDate.trim()) : start;
+        } catch (Exception e) {
+            log.warn("addEvent 结束日期格式非法: {}", endDate);
+            return "错误：结束日期「" + endDate + "」格式不合法，必须为 yyyy-MM-dd（如 2026-09-05），请修正后重新调用";
+        }
+        // 日期倒挂防御：结束早于开始时自动修正为单日，并在返回中告知模型
+        boolean fixedRange = false;
+        if (end.isBefore(start)) {
+            log.warn("addEvent 结束日期早于开始日期，已修正: {} < {}", end, start);
+            end = start;
+            fixedRange = true;
+        }
+
         StudyEvent event = new StudyEvent();
         event.setUserId(userId);
         event.setTitle(title);
-        event.setEventDate(LocalDate.parse(startDate));
-        event.setEndDate(endDate != null && !endDate.isBlank() ? LocalDate.parse(endDate) : LocalDate.parse(startDate));
+        event.setEventDate(start);
+        event.setEndDate(end);
         event.setEventType(eventType != null ? eventType : "task");
         event.setDescription("AI 自动创建");
         event.setSource("ai");
         event.setColor("review".equals(eventType) ? "#9B59B6" : "exam".equals(eventType) ? "#F56C6C" : "#409EFF");
 
         calendarService.addEvent(userId, event);
-        return "已成功添加事件：「" + title + "」(" + startDate + ")";
+        String rangeDesc = end.equals(start) ? start.toString()
+                : start + " ~ " + end + (fixedRange ? "（注意：你传的结束日期早于开始日期，已修正为单日）" : "");
+        return "已成功添加事件：「" + title + "」(" + rangeDesc + ")";
     }
 
     /**
