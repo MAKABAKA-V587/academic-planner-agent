@@ -9,15 +9,13 @@ jobs:
   backend-test:
     name: Backend — mvn test（Testcontainers）
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     defaults:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
@@ -32,39 +30,6 @@ jobs:
 
       - name: Run tests
         run: mvn -B test
-
-      # 失败时把 surefire 摘要发为 commit comment（匿名可读，便于远程定位）
-      - name: Report failures to commit comment
-        if: failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          {
-            echo "### Surefire reports (run ${{ github.run_id }})"
-            for f in target/surefire-reports/*.txt; do
-              echo ""
-              echo "#### $f"
-              echo '```'
-              cat "$f" || true
-              echo '```'
-            done
-          } > /tmp/report.md
-          {
-            echo ""
-            echo "#### docker containers"
-            echo '```'
-            docker ps -a --format '{{.Names}} | {{.Image}} | {{.Status}} | {{.Ports}}' || true
-            echo '```'
-            for c in $(docker ps -a --format '{{.Names}}' | grep -i chroma); do
-              echo ""
-              echo "#### chroma logs: $c"
-              echo '```'
-              docker logs "$c" 2>&1 | tail -40 || true
-              echo '```'
-            done
-          } >> /tmp/report.md
-          jq -Rs '{body: .[0:60000]}' /tmp/report.md > /tmp/payload.json
-          gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/comments" --input /tmp/payload.json
 
       - name: Upload test reports
         if: always()
@@ -81,7 +46,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: actions/setup-node@v4
         with:
