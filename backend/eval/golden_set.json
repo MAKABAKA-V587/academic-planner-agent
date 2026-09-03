@@ -1,0 +1,240 @@
+{
+  "_schema": {
+    "id": "用例唯一标识",
+    "query": "用户自然语言提问（端到端评测输入）",
+    "subject": "标注的科目名（检索层评测输入；hard 用例用别名测归一化）",
+    "keyword": "标注的知识点关键词（检索层评测输入）",
+    "difficulty": "easy(标准问法) / medium(同义改写) / hard(别名+口语+跨概念) / ood(知识库外)",
+    "relevant_sources": ["正确知识条目，格式: 科目 - 主题；检索命中其中任一即算 Recall 命中"],
+    "reference_answer": "参考答案（忠实提炼自 knowledge.json 对应条目，LLM-judge 与文本指标均以此为 ground truth）",
+    "expected_hit": "检索是否预期命中；ood 用例为 false，期望工具返回未收录提示且模型不编造"
+  },
+  "_metrics_standard": {
+    "相关性 relevance": "1-5 分：回答是否针对所问知识点展开，无答非所问",
+    "准确性 accuracy": "1-5 分：回答与参考答案的事实是否一致，无错误表述",
+    "完整性 completeness": "1-5 分：参考答案的要点（核心概念/学习重点/常见考点）覆盖比例",
+    "幻觉 hallucination": "布尔：回答是否编造了参考答案与知识库之外的具体事实（通用学习建议不算幻觉）"
+  },
+  "cases": [
+    {
+      "id": "EASY-01",
+      "query": "什么是链表？学习链表要重点关注什么",
+      "subject": "数据结构",
+      "keyword": "链表",
+      "difficulty": "easy",
+      "relevant_sources": ["数据结构 - 链表"],
+      "reference_answer": "链表是通过指针串联的非连续存储结构，分为单链表、双向链表、循环链表。学习重点：头插/尾插/中间插入 O(1)、查找 O(n)、反转链表（迭代+递归）、快慢指针判环。常见考点：链表反转、合并有序链表、LRU 缓存实现、环形链表入口检测。",
+      "expected_hit": true
+    },
+    {
+      "id": "EASY-02",
+      "query": "什么是死锁？死锁产生的条件有哪些",
+      "subject": "操作系统",
+      "keyword": "死锁",
+      "difficulty": "easy",
+      "relevant_sources": ["操作系统 - 死锁"],
+      "reference_answer": "死锁是多个进程因互相等待对方释放资源而陷入无限等待的状态。四个必要条件：互斥、持有并等待、不可剥夺、循环等待。学习重点还包括银行家算法；常见考点：死锁预防 vs 避免 vs 检测与恢复、哲学家就餐问题、资源分配图。",
+      "expected_hit": true
+    },
+    {
+      "id": "EASY-03",
+      "query": "介绍一下数据库事务和 ACID 特性",
+      "subject": "数据库",
+      "keyword": "事务",
+      "difficulty": "easy",
+      "relevant_sources": ["数据库 - 事务"],
+      "reference_answer": "事务是一组不可分割的数据库操作，要么全部成功，要么全部失败。ACID 特性：原子性、一致性、隔离性、持久性。四种隔离级别：读未提交、读已提交、可重复读、串行化。常见考点：脏读/不可重复读/幻读、MVCC 多版本并发控制、死锁检测与处理。",
+      "expected_hit": true
+    },
+    {
+      "id": "EASY-04",
+      "query": "导数的定义和常见求导法则是什么",
+      "subject": "高等数学",
+      "keyword": "导数与微分",
+      "difficulty": "easy",
+      "relevant_sources": ["高等数学 - 导数与微分"],
+      "reference_answer": "导数是描述函数变化率的工具。学习重点：导数定义与几何意义、求导法则（四则/链式/隐函数/参数方程）、高阶导数。常见考点：中值定理（罗尔/拉格朗日/柯西）、泰勒公式与近似计算、单调性与极值判定。",
+      "expected_hit": true
+    },
+    {
+      "id": "EASY-05",
+      "query": "Java 多线程怎么创建？线程池是怎么回事",
+      "subject": "Java",
+      "keyword": "多线程",
+      "difficulty": "easy",
+      "relevant_sources": ["Java - 多线程"],
+      "reference_answer": "多线程是同时执行多个任务以提高程序效率的机制。线程创建方式：Thread/Runnable/Callable。学习重点：线程生命周期、synchronized 锁、volatile 关键字。常见考点：线程池（ThreadPoolExecutor）、JUC 包（Lock/CountDownLatch/CyclicBarrier）、死锁分析、CAS 原理。",
+      "expected_hit": true
+    },
+    {
+      "id": "EASY-06",
+      "query": "Python 的生成器是什么？yield 怎么用",
+      "subject": "Python",
+      "keyword": "迭代器与生成器",
+      "difficulty": "easy",
+      "relevant_sources": ["Python - 迭代器与生成器"],
+      "reference_answer": "迭代器与生成器是 Python 高效的惰性计算机制。学习重点：iter() 与 next()、yield 关键字、生成器表达式 vs 列表推导式。常见考点：自定义迭代器（__iter__/__next__）、生成器 send() 方法、itertools 模块常用函数（chain/groupby/permutations）。",
+      "expected_hit": true
+    },
+    {
+      "id": "EASY-07",
+      "query": "监督学习和无监督学习有什么区别？",
+      "subject": "机器学习",
+      "keyword": "监督学习",
+      "difficulty": "easy",
+      "relevant_sources": ["机器学习 - 监督学习"],
+      "reference_answer": "监督学习是利用有标签数据训练模型，学习输入到输出的映射。学习重点：线性回归（最小二乘法/梯度下降）、逻辑回归（Sigmoid/交叉熵损失）、决策树（信息增益/基尼系数/剪枝）、支持向量机（最大间隔/核函数）。常见考点：过拟合与欠拟合、正则化（L1/L2）、偏差-方差权衡、交叉验证（K-Fold）。",
+      "expected_hit": true
+    },
+    {
+      "id": "EASY-08",
+      "query": "二叉树的遍历方式有哪些？",
+      "subject": "数据结构",
+      "keyword": "二叉树",
+      "difficulty": "easy",
+      "relevant_sources": ["数据结构 - 二叉树"],
+      "reference_answer": "二叉树是每个节点最多两个子节点的树形结构。学习重点：前/中/后序遍历（递归+迭代）、层序遍历、二叉搜索树 BST、平衡二叉树 AVL。常见考点：最近公共祖先（LCA）、路径和问题、树的序列化与反序列化、重建二叉树。",
+      "expected_hit": true
+    },
+    {
+      "id": "MED-01",
+      "query": "TCP 为什么要三次握手，挥手为什么是四次？",
+      "subject": "计算机网络",
+      "keyword": "TCP三次握手",
+      "difficulty": "medium",
+      "relevant_sources": ["计算机网络 - TCP协议"],
+      "reference_answer": "TCP 是面向连接、可靠传输的传输层协议，保证数据按序无差错到达。学习重点：三次握手与四次挥手、拥塞控制（慢开始/拥塞避免/快重传/快恢复）、流量控制（滑动窗口）。常见考点：TIME_WAIT 状态、SYN Flood 攻击、TCP 与 UDP 区别、可靠传输机制（确认/重传/校验）。",
+      "expected_hit": true
+    },
+    {
+      "id": "MED-02",
+      "query": "页面置换算法有哪些？LRU 是怎么工作的？",
+      "subject": "操作系统",
+      "keyword": "页面置换算法",
+      "difficulty": "medium",
+      "relevant_sources": ["操作系统 - 内存管理"],
+      "reference_answer": "内存管理是操作系统对内存的分配、回收、地址转换与保护。学习重点：分页（页表、TLB）、分段、段页式、虚拟内存与缺页中断。常见考点：页面置换算法（LRU/FIFO/OPT）、Belady 异常、内存碎片（内部/外部）、伙伴系统。LRU 即最近最久未使用置换，属于常考的页面置换算法之一。",
+      "expected_hit": true
+    },
+    {
+      "id": "MED-03",
+      "query": "MySQL 索引什么时候会失效？为什么用 B+ 树做索引？",
+      "subject": "数据库",
+      "keyword": "索引",
+      "difficulty": "medium",
+      "relevant_sources": ["数据库 - 索引"],
+      "reference_answer": "索引是加速数据检索的数据结构，类似于书的目录。学习重点：B+ 树结构与优势、聚簇索引与非聚簇索引、最左前缀原则、覆盖索引。常见考点：索引失效场景、EXPLAIN 执行计划分析、索引下推 ICP、联合索引设计原则。",
+      "expected_hit": true
+    },
+    {
+      "id": "MED-04",
+      "query": "怎么判断一个矩阵是否可逆？",
+      "subject": "线性代数",
+      "keyword": "矩阵",
+      "difficulty": "medium",
+      "relevant_sources": ["线性代数 - 矩阵"],
+      "reference_answer": "矩阵是由 m×n 个数排列成的矩形阵列。学习重点：矩阵运算（加减/数乘/乘法/转置）、逆矩阵（伴随矩阵法/初等变换法）、秩的定义与计算。常见考点：矩阵方程求解、分块矩阵、伴随矩阵性质、可逆的等价条件。判断可逆即考察可逆的等价条件（如行列式非零、满秩等）。",
+      "expected_hit": true
+    },
+    {
+      "id": "MED-05",
+      "query": "动态规划和贪心算法的区别是什么？各自适用什么场景？",
+      "subject": "算法设计",
+      "keyword": "动态规划 贪心",
+      "difficulty": "medium",
+      "relevant_sources": ["算法设计 - 动态规划", "算法设计 - 贪心算法"],
+      "reference_answer": "动态规划是将问题分解为重叠子问题，自底向上或记忆化搜索求解最优解，需要最优子结构与无后效性；贪心算法是每步选择当前最优、期望最终全局最优，需要贪心选择性质与最优子结构，且不需要回溯。两者区别在于贪心不回溯、依赖贪心选择性质；常见考点：01 背包与完全背包、LCS、活动选择问题、哈夫曼编码、Dijkstra 最短路径、区间调度。",
+      "expected_hit": true
+    },
+    {
+      "id": "MED-06",
+      "query": "C 语言里 malloc 和 free 用的时候要注意什么？内存泄漏怎么回事？",
+      "subject": "C语言",
+      "keyword": "内存管理",
+      "difficulty": "medium",
+      "relevant_sources": ["C语言 - 内存管理"],
+      "reference_answer": "C 语言内存管理涉及动态分配和释放内存。学习重点：malloc/calloc/realloc/free、内存分区（栈/堆/静态区/常量区）。常见考点：内存泄漏检测、悬垂指针、栈溢出与堆溢出、valgrind 工具使用。使用注意：malloc 后要检查返回值、free 后置空指针避免悬垂指针、配对使用避免泄漏。",
+      "expected_hit": true
+    },
+    {
+      "id": "MED-07",
+      "query": "考研英语阅读理解有哪几种题型？长难句怎么分析？",
+      "subject": "考研英语",
+      "keyword": "阅读理解",
+      "difficulty": "medium",
+      "relevant_sources": ["考研英语 - 阅读理解"],
+      "reference_answer": "阅读理解是考研英语 Part A，占 40 分，是得分大头。六大题型：细节题/推断题/主旨题/词义题/态度题/例证题。学习重点：定位法、同义替换识别。常见考点：长难句分析（定语从句嵌套/插入语/倒装）、段落逻辑关系（转折/因果/例证）、干扰项特征（偷换概念/过度推断/张冠李戴）。",
+      "expected_hit": true
+    },
+    {
+      "id": "MED-08",
+      "query": "epoll 比 select 强在哪里？I/O 多路复用是怎么回事？",
+      "subject": "操作系统",
+      "keyword": "epoll select 多路复用",
+      "difficulty": "medium",
+      "relevant_sources": ["操作系统 - I/O 模型"],
+      "reference_answer": "I/O 模型是应用程序与外部设备之间的数据交换方式。学习重点：阻塞 I/O、非阻塞 I/O、I/O 多路复用（select/poll/epoll）、信号驱动 I/O、异步 I/O。常见考点：epoll 的 ET 与 LT 模式、零拷贝技术（sendfile/mmap）、select 的 1024 限制。epoll 相比 select 没有文件描述符数量限制且效率更高。",
+      "expected_hit": true
+    },
+    {
+      "id": "HARD-01",
+      "query": "OS 里哲学家就餐问题讲的是什么？怎么解决？",
+      "subject": "OS",
+      "keyword": "哲学家就餐",
+      "difficulty": "hard",
+      "relevant_sources": ["操作系统 - 死锁"],
+      "reference_answer": "哲学家就餐问题是死锁章节的经典考点。死锁是多个进程因互相等待对方释放资源而陷入无限等待的状态，四个必要条件：互斥、持有并等待、不可剥夺、循环等待。常见考点包括死锁预防 vs 避免 vs 检测与恢复、哲学家就餐问题、资源分配图。",
+      "expected_hit": true
+    },
+    {
+      "id": "HARD-02",
+      "query": "计网的 TIME_WAIT 状态是什么？为什么要等 2MSL？",
+      "subject": "计网",
+      "keyword": "TIME_WAIT",
+      "difficulty": "hard",
+      "relevant_sources": ["计算机网络 - TCP协议"],
+      "reference_answer": "TIME_WAIT 是 TCP 四次挥手中的状态，属于 TCP 协议的常见考点。TCP 是面向连接、可靠传输的传输层协议。学习重点：三次握手与四次挥手、拥塞控制、流量控制（滑动窗口）。常见考点：TIME_WAIT 状态、SYN Flood 攻击、TCP 与 UDP 区别、可靠传输机制。",
+      "expected_hit": true
+    },
+    {
+      "id": "HARD-03",
+      "query": "ds 里 LRU 缓存怎么实现的？面试会怎么考？",
+      "subject": "DS",
+      "keyword": "LRU",
+      "difficulty": "hard",
+      "relevant_sources": ["数据结构 - 链表", "数据结构 - 哈希表"],
+      "reference_answer": "LRU 缓存实现是数据结构的常见考点，出现在链表条目中：链表学习重点包括反转链表、快慢指针判环，常见考点包括链表反转、合并有序链表、LRU 缓存实现、环形链表入口检测；哈希表条目的常见考点也包含设计 HashMap。LRU 通常用哈希表 + 双向链表实现，做到 O(1) 查找与更新。",
+      "expected_hit": true
+    },
+    {
+      "id": "HARD-04",
+      "query": "线代的特征值和特征向量有什么用？怎么求？",
+      "subject": "线代",
+      "keyword": "特征值",
+      "difficulty": "hard",
+      "relevant_sources": ["线性代数 - 特征值与特征向量"],
+      "reference_answer": "特征值与特征向量满足 A·x = λ·x，λ 为特征值，x 为对应的特征向量。学习重点：特征多项式 |A-λE|=0 求解、相似对角化（A=PΛP⁻¹）。常见考点：实对称矩阵正交对角化、二次型标准化、正定矩阵判定。求解步骤：先求特征多项式的根得到特征值，再解齐次方程组得到特征向量。",
+      "expected_hit": true
+    },
+    {
+      "id": "OOD-01",
+      "query": "量子计算的基本原理是什么？量子比特和经典比特有什么区别？",
+      "subject": "量子计算",
+      "keyword": "量子比特",
+      "difficulty": "ood",
+      "relevant_sources": [],
+      "reference_answer": "知识库未收录量子计算相关内容。正确行为：明确告知该知识点未收录，可给出通用学习建议（查课程/教材/论文），但不得编造量子计算的具体知识点。",
+      "expected_hit": false
+    },
+    {
+      "id": "OOD-02",
+      "query": "区块链的共识机制有哪些？PoW 和 PoS 的区别？",
+      "subject": "区块链",
+      "keyword": "共识机制",
+      "difficulty": "ood",
+      "relevant_sources": [],
+      "reference_answer": "知识库未收录区块链相关内容。正确行为：明确告知该知识点未收录，可给出通用学习建议，但不得编造 PoW/PoS 等共识机制的具体内容。",
+      "expected_hit": false
+    }
+  ]
+}

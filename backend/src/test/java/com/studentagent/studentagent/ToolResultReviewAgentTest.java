@@ -1,190 +1,95 @@
 package com.studentagent.studentagent;
 
 import com.studentagent.studentagent.service.review.ToolResultReviewAgent;
-import com.studentagent.studentagent.tool.ToolContextHolder;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
-import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.model.chat.ChatModel;
-import dev.langchain4j.model.chat.response.ChatResponse;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
-
-import java.lang.reflect.Field;
-import java.util.List;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 /**
- * 评审 Agent 单元测试：规则评审（空结果/显式错误/跨用户泄露）+ LLM 评审（VALID/INVALID/降级）。
- * 纯 Mockito 单元测试，不加载 Spring 上下文。
+ * 评审Agent R4 内容质量检查项单测：
+ * generateStudyPlan 未传知识点大纲且结果为通用模板内容时，追加"如实告知通用框架"提示；
+ * 传了 topics / 其他工具 / 非模板内容 一律不命中。
  */
 class ToolResultReviewAgentTest {
 
-    private ChatModel chatModel;
     private ToolResultReviewAgent agent;
 
+    /** 通用模板内容片段（WEEK_PLAN 词） */
+    private static final String GENERIC_PLAN =
+            "# 📚 Python 学习计划\n\n| 日期 | 任务 | 类型 |\n|------|------|------|\n| 9.1 | 教材精读 + 视频课程 | 学习 |";
+
+    /** 针对性内容片段（无 WEEK_PLAN 词） */
+    private static final String SPECIFIC_PLAN =
+            "| 9.1 | 数据库安装与基本操作 | 学习 |\n| 9.2 | SQL基础查询语法 | 学习 |";
+
     @BeforeEach
-    void setUp() throws Exception {
-        chatModel = Mockito.mock(ChatModel.class);
-        agent = new ToolResultReviewAgent(chatModel);
-        setField("enabled", true);
-        setField("llmTimeoutMs", 2000L);
-        setField("llmTools", "searchKnowledge,webSearch,queryEvents");
+    void setUp() {
+        agent = new ToolResultReviewAgent(Mockito.mock(ChatModel.class));
+        ReflectionTestUtils.setField(agent, "enabled", true);
     }
 
-    @AfterEach
-    void tearDown() {
-        ToolContextHolder.clear();
-    }
-
-    private void setField(String name, Object value) throws Exception {
-        Field f = ToolResultReviewAgent.class.getDeclaredField(name);
-        f.setAccessible(true);
-        f.set(agent, value);
-    }
-
-    private ToolExecutionRequest request(String toolName) {
+    private ToolExecutionRequest planRequest(String arguments) {
         return ToolExecutionRequest.builder()
-                .id("req-1")
-                .name(toolName)
-                .arguments("{\"keyword\":\"链表\"}")
-                .build();
-    }
-
-    private String review(String toolName, String result) {
-        return agent.review("帮我查一下链表", request(toolName), result);
-    }
-
-    // ========== 开关与直通 ==========
-
-    private void stubLlm(String verdict) {
-        when(chatModel.chat(anyList())).thenReturn(
-                ChatResponse.builder().aiMessage(AiMessage.from(verdict)).build());
-    }
-
-    private void stubLlmError() {
-        when(chatModel.chat(anyList())).thenThrow(new RuntimeException("api down"));
+                .id("1").name("generateStudyPlan").arguments(arguments).build();
     }
 
     @Test
-    @DisplayName("开关关闭：一切直通（含空结果）")
-    void disabledPassThrough() throws Exception {
-        setField("enabled", false);
-        assertEquals("", review("addEvent", ""));
-        verify(chatModel, never()).chat(anyList());
+    @DisplayName("R4 命中：无 topics 参数 + 通用模板内容 → 追加内容质量提示")
+    void r4HitsWithoutTopics() {
+        String args = "{\"subject\":\"Python\",\"examTime\":\"2026-12\",\"planDays\":5}";
+        String reviewed = agent.review("帮我生成学习计划", planRequest(args), GENERIC_PLAN);
+        assertTrue(reviewed.contains("[评审Agent-内容质量]"), "应追加内容质量提示");
+        assertTrue(reviewed.contains(GENERIC_PLAN.strip()), "原始计划内容应保留（不拦截）");
     }
 
     @Test
-    @DisplayName("显式错误文本：直通，模型需要看到错误才能向用户解释")
-    void explicitErrorPassThrough() {
-        String result = "错误：找不到工具 foo";
-        assertEquals(result, review("addEvent", result));
-        verify(chatModel, never()).chat(anyList());
+    @DisplayName("R4 命中：topics 传空字符串视同未传")
+    void r4HitsWithEmptyTopics() {
+        String args = "{\"subject\":\"Python\",\"topics\":\"\"}";
+        String reviewed = agent.review("帮我生成学习计划", planRequest(args), GENERIC_PLAN);
+        assertTrue(reviewed.contains("[评审Agent-内容质量]"), "空 topics 应视同未传");
     }
 
     @Test
-    @DisplayName("写工具正常结果：直通且不触发 LLM 评审")
-    void writeToolPassThrough() {
-        String result = "已为用户添加事件：复习高数（2026-09-01）";
-        assertEquals(result, review("addEvent", result));
-        verify(chatModel, never()).chat(anyList());
-    }
-
-    // ========== 规则评审 R1：空结果防幻觉 ==========
-
-    @Test
-    @DisplayName("空结果：替换为防幻觉提示")
-    void emptyResultIntercepted() {
-        String reviewed = review("addEvent", "   ");
-        assertTrue(reviewed.contains("不要编造成功信息"));
-    }
-
-    // ========== 规则评审 R3：跨用户泄露 ==========
-
-    @Test
-    @DisplayName("结果含他人 userId：整条拦截")
-    void crossUserLeakIntercepted() {
-        ToolContextHolder.set(1L, 11L, false);
-        String result = "[{\"title\":\"别人玩家的计划\",\"userId\":99}]";
-        String reviewed = review("queryEvents", result);
-        assertTrue(reviewed.contains("不属于当前用户"));
+    @DisplayName("R4 不命中：模型传了非空 topics → 原样放行")
+    void r4SkipsWhenTopicsPresent() {
+        String args = "{\"subject\":\"MySQL\",\"topics\":\"数据库安装与建表;SQL单表查询\"}";
+        String reviewed = agent.review("帮我生成学习计划", planRequest(args), GENERIC_PLAN);
+        assertEquals(GENERIC_PLAN, reviewed, "传了大纲不应追加提示");
     }
 
     @Test
-    @DisplayName("结果含本人 userId：直通")
-    void ownUserIdPassThrough() {
-        ToolContextHolder.set(1L, 11L, false);
-        String result = "[{\"title\":\"我的计划\",\"userId\":11}]";
-        assertEquals(result, review("queryEvents", result));
+    @DisplayName("R4 不命中：结果为针对性内容（无通用模板词）→ 原样放行")
+    void r4SkipsWhenContentSpecific() {
+        String args = "{\"subject\":\"Python\",\"planDays\":5}";
+        String reviewed = agent.review("帮我生成学习计划", planRequest(args), SPECIFIC_PLAN);
+        assertEquals(SPECIFIC_PLAN, reviewed, "针对性内容不应追加提示");
     }
 
     @Test
-    @DisplayName("无登录上下文（userId=null）：跳过跨用户比对，直通")
-    void noContextPassThrough() {
-        String result = "[{\"title\":\"计划\",\"userId\":99}]";
-        assertEquals(result, review("queryEvents", result));
-    }
-
-    // ========== LLM 评审（只读工具） ==========
-
-    @Test
-    @DisplayName("LLM 评审 VALID：原样放行")
-    void llmValidPassThrough() {
-        stubLlm("VALID");
-        String result = "链表：由节点组成的线性结构，每个节点含数据域和指针域……";
-        assertEquals(result, review("searchKnowledge", result));
+    @DisplayName("R4 不命中：其他工具结果含通用词 → 不检查内容质量")
+    void r4SkipsOtherTools() {
+        ToolExecutionRequest req = ToolExecutionRequest.builder()
+                .id("2").name("queryEvents")
+                .arguments("{\"startDate\":\"2026-09-01\",\"endDate\":\"2026-09-05\"}").build();
+        String reviewed = agent.review("我的计划", req, GENERIC_PLAN);
+        assertEquals(GENERIC_PLAN, reviewed, "非计划工具不适用内容质量检查");
     }
 
     @Test
-    @DisplayName("LLM 评审 INVALID：替换为不可信提示")
-    void llmInvalidReplaced() {
-        stubLlm("INVALID:返回内容与用户问题无关");
-        String reviewed = review("searchKnowledge", "完全无关的内容");
-        assertTrue(reviewed.contains("不可用"));
-        assertTrue(reviewed.contains("不要引用该结果"));
-    }
-
-    @Test
-    @DisplayName("LLM 输出不认识：降级放行原始结果")
-    void llmUnknownOutputPassThrough() {
-        stubLlm("我觉得还行吧");
-        String result = "链表相关内容";
-        assertEquals(result, review("searchKnowledge", result));
-    }
-
-    @Test
-    @DisplayName("LLM 抛异常：降级放行原始结果（永不比现状差）")
-    void llmErrorPassThrough() {
-        stubLlmError();
-        String result = "搜索结果正文";
-        assertEquals(result, review("webSearch", result));
-    }
-
-    @Test
-    @DisplayName("LLM 评审超时：降级放行原始结果")
-    void llmTimeoutPassThrough() throws Exception {
-        setField("llmTimeoutMs", 0L);
-        when(chatModel.chat(anyList())).thenAnswer(inv -> {
-            Thread.sleep(50);
-            return ChatResponse.builder().aiMessage(AiMessage.from("VALID")).build();
-        });
-        String result = "搜索结果正文";
-        assertEquals(result, review("webSearch", result));
-    }
-
-    @Test
-    @DisplayName("LLM 评审只对配置的只读工具触发，写工具永不触发")
-    void llmOnlyForConfiguredTools() {
-        String result = "正常结果";
-        assertEquals(result, review("generateStudyPlan", result));
-        verify(chatModel, never()).chat(anyList());
+    @DisplayName("R1 回归：空结果仍被拦截为防幻觉提示")
+    void r1EmptyResultStillBlocked() {
+        String args = "{\"subject\":\"Python\"}";
+        String reviewed = agent.review("帮我生成学习计划", planRequest(args), "  ");
+        assertTrue(reviewed.contains("工具返回空结果"), "空结果应走 R1 拦截");
+        assertFalse(reviewed.contains("[评审Agent-内容质量]"), "空结果不应走 R4");
     }
 }

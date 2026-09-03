@@ -1,0 +1,489 @@
+{
+  "variant": "thr07",
+  "timestamp": "2026-09-02T16:26:51",
+  "config": {
+    "base_url": "http://localhost:8080",
+    "phase": "retrieval",
+    "threshold": 0.7,
+    "max_topk": 5,
+    "n_cases": 22,
+    "judge": false,
+    "judge_model": "deepseek-ai/DeepSeek-V3"
+  },
+  "retrieval_summary": {
+    "n_total": 22,
+    "n_hit_expected": 20,
+    "n_ood": 2,
+    "recall@1": 0.95,
+    "recall@3": 0.95,
+    "recall@5": 0.95,
+    "mrr": 0.95,
+    "retriever_distribution": {
+      "memory": 17,
+      "vector": 4,
+      "miss": 1
+    },
+    "ood_rejection_rate": 0.5,
+    "avg_cost_ms": 57.5
+  },
+  "retrieval_results": [
+    {
+      "id": "EASY-01",
+      "difficulty": "easy",
+      "query": "什么是链表？学习链表要重点关注什么",
+      "relevant": [
+        "数据结构 - 链表"
+      ],
+      "expected_hit": true,
+      "retriever": "memory",
+      "candidates": [
+        {
+          "source": "数据结构 - 链表",
+          "score": 1.0
+        }
+      ],
+      "costMs": 0,
+      "error": null
+    },
+    {
+      "id": "EASY-02",
+      "difficulty": "easy",
+      "query": "什么是死锁？死锁产生的条件有哪些",
+      "relevant": [
+        "操作系统 - 死锁"
+      ],
+      "expected_hit": true,
+      "retriever": "memory",
+      "candidates": [
+        {
+          "source": "操作系统 - 死锁",
+          "score": 1.0
+        }
+      ],
+      "costMs": 0,
+      "error": null
+    },
+    {
+      "id": "EASY-03",
+      "difficulty": "easy",
+      "query": "介绍一下数据库事务和 ACID 特性",
+      "relevant": [
+        "数据库 - 事务"
+      ],
+      "expected_hit": true,
+      "retriever": "memory",
+      "candidates": [
+        {
+          "source": "数据库 - 事务",
+          "score": 1.0
+        }
+      ],
+      "costMs": 1,
+      "error": null
+    },
+    {
+      "id": "EASY-04",
+      "difficulty": "easy",
+      "query": "导数的定义和常见求导法则是什么",
+      "relevant": [
+        "高等数学 - 导数与微分"
+      ],
+      "expected_hit": true,
+      "retriever": "memory",
+      "candidates": [
+        {
+          "source": "高等数学 - 导数与微分",
+          "score": 1.0
+        }
+      ],
+      "costMs": 0,
+      "error": null
+    },
+    {
+      "id": "EASY-05",
+      "difficulty": "easy",
+      "query": "Java 多线程怎么创建？线程池是怎么回事",
+      "relevant": [
+        "Java - 多线程"
+      ],
+      "expected_hit": true,
+      "retriever": "memory",
+      "candidates": [
+        {
+          "source": "Java - 多线程",
+          "score": 1.0
+        }
+      ],
+      "costMs": 0,
+      "error": null
+    },
+    {
+      "id": "EASY-06",
+      "difficulty": "easy",
+      "query": "Python 的生成器是什么？yield 怎么用",
+      "relevant": [
+        "Python - 迭代器与生成器"
+      ],
+      "expected_hit": true,
+      "retriever": "memory",
+      "candidates": [
+        {
+          "source": "Python - 迭代器与生成器",
+          "score": 1.0
+        }
+      ],
+      "costMs": 0,
+      "error": null
+    },
+    {
+      "id": "EASY-07",
+      "difficulty": "easy",
+      "query": "监督学习和无监督学习有什么区别？",
+      "relevant": [
+        "机器学习 - 监督学习"
+      ],
+      "expected_hit": true,
+      "retriever": "memory",
+      "candidates": [
+        {
+          "source": "机器学习 - 监督学习",
+          "score": 1.0
+        }
+      ],
+      "costMs": 1,
+      "error": null
+    },
+    {
+      "id": "EASY-08",
+      "difficulty": "easy",
+      "query": "二叉树的遍历方式有哪些？",
+      "relevant": [
+        "数据结构 - 二叉树"
+      ],
+      "expected_hit": true,
+      "retriever": "memory",
+      "candidates": [
+        {
+          "source": "数据结构 - 二叉树",
+          "score": 1.0
+        }
+      ],
+      "costMs": 0,
+      "error": null
+    },
+    {
+      "id": "MED-01",
+      "difficulty": "medium",
+      "query": "TCP 为什么要三次握手，挥手为什么是四次？",
+      "relevant": [
+        "计算机网络 - TCP协议"
+      ],
+      "expected_hit": true,
+      "retriever": "memory",
+      "candidates": [
+        {
+          "source": "计算机网络 - TCP协议",
+          "score": 1.0
+        }
+      ],
+      "costMs": 0,
+      "error": null
+    },
+    {
+      "id": "MED-02",
+      "difficulty": "medium",
+      "query": "页面置换算法有哪些？LRU 是怎么工作的？",
+      "relevant": [
+        "操作系统 - 内存管理"
+      ],
+      "expected_hit": true,
+      "retriever": "memory",
+      "candidates": [
+        {
+          "source": "数据结构 - 排序算法",
+          "score": 1.0
+        }
+      ],
+      "costMs": 0,
+      "error": null
+    },
+    {
+      "id": "MED-03",
+      "difficulty": "medium",
+      "query": "MySQL 索引什么时候会失效？为什么用 B+ 树做索引？",
+      "relevant": [
+        "数据库 - 索引"
+      ],
+      "expected_hit": true,
+      "retriever": "memory",
+      "candidates": [
+        {
+          "source": "数据库 - 索引",
+          "score": 1.0
+        }
+      ],
+      "costMs": 0,
+      "error": null
+    },
+    {
+      "id": "MED-04",
+      "difficulty": "medium",
+      "query": "怎么判断一个矩阵是否可逆？",
+      "relevant": [
+        "线性代数 - 矩阵"
+      ],
+      "expected_hit": true,
+      "retriever": "memory",
+      "candidates": [
+        {
+          "source": "线性代数 - 矩阵",
+          "score": 1.0
+        }
+      ],
+      "costMs": 0,
+      "error": null
+    },
+    {
+      "id": "MED-05",
+      "difficulty": "medium",
+      "query": "动态规划和贪心算法的区别是什么？各自适用什么场景？",
+      "relevant": [
+        "算法设计 - 动态规划",
+        "算法设计 - 贪心算法"
+      ],
+      "expected_hit": true,
+      "retriever": "memory",
+      "candidates": [
+        {
+          "source": "算法设计 - 动态规划",
+          "score": 1.0
+        }
+      ],
+      "costMs": 0,
+      "error": null
+    },
+    {
+      "id": "MED-06",
+      "difficulty": "medium",
+      "query": "C 语言里 malloc 和 free 用的时候要注意什么？内存泄漏怎么回事？",
+      "relevant": [
+        "C语言 - 内存管理"
+      ],
+      "expected_hit": true,
+      "retriever": "memory",
+      "candidates": [
+        {
+          "source": "C语言 - 内存管理",
+          "score": 1.0
+        }
+      ],
+      "costMs": 0,
+      "error": null
+    },
+    {
+      "id": "MED-07",
+      "difficulty": "medium",
+      "query": "考研英语阅读理解有哪几种题型？长难句怎么分析？",
+      "relevant": [
+        "考研英语 - 阅读理解"
+      ],
+      "expected_hit": true,
+      "retriever": "memory",
+      "candidates": [
+        {
+          "source": "考研英语 - 阅读理解",
+          "score": 1.0
+        }
+      ],
+      "costMs": 0,
+      "error": null
+    },
+    {
+      "id": "MED-08",
+      "difficulty": "medium",
+      "query": "epoll 比 select 强在哪里？I/O 多路复用是怎么回事？",
+      "relevant": [
+        "操作系统 - I/O 模型"
+      ],
+      "expected_hit": true,
+      "retriever": "vector",
+      "candidates": [
+        {
+          "source": "操作系统 - I/O 模型",
+          "score": 0.8205279409885406
+        },
+        {
+          "source": "操作系统 - 进程与线程",
+          "score": 0.7392175197601318
+        },
+        {
+          "source": "C语言 - 文件操作",
+          "score": 0.735933244228363
+        },
+        {
+          "source": "Java - 多线程",
+          "score": 0.7359102368354797
+        },
+        {
+          "source": "Java - 多线程",
+          "score": 0.7358629703521729
+        }
+      ],
+      "costMs": 429,
+      "error": null
+    },
+    {
+      "id": "HARD-01",
+      "difficulty": "hard",
+      "query": "OS 里哲学家就餐问题讲的是什么？怎么解决？",
+      "relevant": [
+        "操作系统 - 死锁"
+      ],
+      "expected_hit": true,
+      "retriever": "vector",
+      "candidates": [
+        {
+          "source": "操作系统 - 死锁",
+          "score": 0.7240328192710876
+        },
+        {
+          "source": "操作系统 - 进程调度",
+          "score": 0.7232659161090851
+        },
+        {
+          "source": "操作系统 - 内存管理",
+          "score": 0.7084609866142273
+        },
+        {
+          "source": "操作系统 - 进程与线程",
+          "score": 0.7046278715133667
+        },
+        {
+          "source": "计算机组成 - 指令系统",
+          "score": 0.6962907910346985
+        }
+      ],
+      "costMs": 313,
+      "error": null
+    },
+    {
+      "id": "HARD-02",
+      "difficulty": "hard",
+      "query": "计网的 TIME_WAIT 状态是什么？为什么要等 2MSL？",
+      "relevant": [
+        "计算机网络 - TCP协议"
+      ],
+      "expected_hit": true,
+      "retriever": "vector",
+      "candidates": [
+        {
+          "source": "计算机网络 - TCP协议",
+          "score": 0.7807139754295349
+        },
+        {
+          "source": "操作系统 - 进程调度",
+          "score": 0.7257479429244995
+        },
+        {
+          "source": "操作系统 - 死锁",
+          "score": 0.7225117087364197
+        },
+        {
+          "source": "计算机网络 - UDP协议",
+          "score": 0.720771461725235
+        },
+        {
+          "source": "计算机网络 - HTTP协议",
+          "score": 0.7095507979393005
+        }
+      ],
+      "costMs": 176,
+      "error": null
+    },
+    {
+      "id": "HARD-03",
+      "difficulty": "hard",
+      "query": "ds 里 LRU 缓存怎么实现的？面试会怎么考？",
+      "relevant": [
+        "数据结构 - 链表",
+        "数据结构 - 哈希表"
+      ],
+      "expected_hit": true,
+      "retriever": "vector",
+      "candidates": [
+        {
+          "source": "数据结构 - 链表",
+          "score": 0.791387528181076
+        },
+        {
+          "source": "计算机组成 - 存储器层次",
+          "score": 0.7882513701915741
+        },
+        {
+          "source": "数据结构 - 队列",
+          "score": 0.7832900881767273
+        },
+        {
+          "source": "数据库 - Redis",
+          "score": 0.7709705829620361
+        },
+        {
+          "source": "数据结构 - 栈",
+          "score": 0.764337956905365
+        }
+      ],
+      "costMs": 189,
+      "error": null
+    },
+    {
+      "id": "HARD-04",
+      "difficulty": "hard",
+      "query": "线代的特征值和特征向量有什么用？怎么求？",
+      "relevant": [
+        "线性代数 - 特征值与特征向量"
+      ],
+      "expected_hit": true,
+      "retriever": "memory",
+      "candidates": [
+        {
+          "source": "线性代数 - 特征值与特征向量",
+          "score": 1.0
+        }
+      ],
+      "costMs": 0,
+      "error": null
+    },
+    {
+      "id": "OOD-01",
+      "difficulty": "ood",
+      "query": "量子计算的基本原理是什么？量子比特和经典比特有什么区别？",
+      "relevant": [],
+      "expected_hit": false,
+      "retriever": "miss",
+      "candidates": [],
+      "costMs": 157,
+      "error": null
+    },
+    {
+      "id": "OOD-02",
+      "difficulty": "ood",
+      "query": "区块链的共识机制有哪些？PoW 和 PoS 的区别？",
+      "relevant": [],
+      "expected_hit": false,
+      "retriever": "memory",
+      "candidates": [
+        {
+          "source": "数据库 - 锁机制",
+          "score": 1.0
+        }
+      ],
+      "costMs": 0,
+      "error": null
+    }
+  ],
+  "e2e_summary": null,
+  "e2e_results": null,
+  "suggestions": [
+    "领域外拒答率 0.5：存在跨科目模糊匹配误命中，建议收紧 matchTopic 的宽松包含策略。"
+  ]
+}

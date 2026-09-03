@@ -62,13 +62,18 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- LangChain4j OpenAI（兼容 SiliconFlow 硅基流动） -->
+        <!-- LangChain4j OpenAI（兼容 SiliconFlow 硅基流动）。
+             注意：starter 硬依赖 spring-restclient（AutoConfig 直接引用，不可排除），
+             与 chroma 自带的 jdk client 共存时 langchain4j 要求显式指定工厂——
+             见 StudentAgentApplication 与集成测试的系统属性；统一选 jdk client，
+             因为 spring-restclient 的默认请求工厂会发 HTTP/2 升级头，
+             Chroma 0.4.24 的 uvicorn 会拒绝（400 Invalid HTTP request received） -->
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-open-ai-spring-boot-starter</artifactId>
         </dependency>
 
-        <!-- LangChain4j Chroma 向量库 -->
+        <!-- LangChain4j Chroma 向量库（自带 jdk http client，与 Chroma 0.4.24 兼容） -->
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-chroma</artifactId>
@@ -103,6 +108,23 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Testcontainers 集成测试（真实 MySQL + Redis 容器） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>mysql</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

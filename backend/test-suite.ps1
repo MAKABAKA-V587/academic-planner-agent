@@ -136,6 +136,82 @@ try {
     Test-Case 'D7 工具-知识库检索' ($c.Length -gt 20) ("len=$($c.Length) 知识来源=$($c -match '知识来源')")
 } catch { Test-Case 'D7 工具-知识库检索' $false $_.Exception.Message }
 
+# ---- D8/D9 学习计划日期范围回归（清空日历 → 生成 → 校验日历分布） ----
+# 注意：会清空测试账号 kaoyan_zhang 的全部日历数据，仅用于测试账号
+function Clear-Calendar {
+    & curl.exe -s -X DELETE "$BASE/api/calendar/all" -H "Authorization: $($script:H.Authorization)" 2>$null
+}
+
+function Get-RangeEvents($start, $end) {
+    $evs = Get-WithAuth "$BASE/api/calendar?month=2026-09" $script:H
+    @($evs.data | Where-Object { [string]$_.eventDate -ge $start -and [string]$_.eventDate -le $end })
+}
+
+try {
+    $resp = Clear-Calendar
+    Test-Case 'D8-pre 清空日历' ($resp -match '"code":200') '清理历史数据保证断言确定性'
+} catch { Test-Case 'D8-pre 清空日历' $false $_.Exception.Message }
+
+try {
+    $json = '{"sessionId":' + $sid + ',"message":"帮我生成9月1日到9月5日的Python学习计划"}'
+    $r = Post-Json "$BASE/api/chat" $json $script:H
+    $c = [string]$r.data.content
+    $inRange = Get-RangeEvents '2026-09-01' '2026-09-05'
+    $ok = ($inRange.Count -eq 5)
+    Test-Case 'D8 工具-指定范围生成逐日计划(恰好5条)' $ok ("范围内事件数=$($inRange.Count) 期望=5 回复len=$($c.Length)")
+} catch { Test-Case 'D8 工具-指定范围生成逐日计划(恰好5条)' $false $_.Exception.Message }
+
+try {
+    Clear-Calendar | Out-Null
+    $json = '{"sessionId":' + $sid + ',"message":"从9月1日到9月5日，每天安排一个Python任务，共5天"}'
+    $r = Post-Json "$BASE/api/chat" $json $script:H
+    $c = [string]$r.data.content
+    $inRange = Get-RangeEvents '2026-09-01' '2026-09-05'
+    $dates = @($inRange | ForEach-Object { [string]$_.eventDate } | Sort-Object -Unique)
+    $ok = ($inRange.Count -eq 5) -and ($dates.Count -eq 5)
+    Test-Case 'D9 工具-每天一个任务共5天(5个不同日期)' $ok ("事件数=$($inRange.Count) 不同日期数=$($dates.Count) 期望均=5")
+} catch { Test-Case 'D9 工具-每天一个任务共5天(5个不同日期)' $false $_.Exception.Message }
+
+# ---- D10 时长语义回归（复现线上"5天变30天"事故） ----
+# 朋友原话同构："帮我在这个月安排一个系统的学习计划，不连续的5天" → 应恰好 5 条
+try {
+    Clear-Calendar | Out-Null
+    $json = '{"sessionId":' + $sid + ',"message":"我第一次接触Python，帮我在这个月安排一个系统的学习计划，不连续的5天"}'
+    $r = Post-Json "$BASE/api/chat" $json $script:H
+    $c = [string]$r.data.content
+    $evs = Get-WithAuth "$BASE/api/calendar?month=2026-09" $script:H
+    $all = @($evs.data)
+    $dates = @($all | ForEach-Object { [string]$_.eventDate } | Sort-Object -Unique)
+    $ok = ($all.Count -eq 5) -and ($dates.Count -eq 5)
+    Test-Case 'D10 工具-本月不连续5天(恰好5条)' $ok ("事件数=$($all.Count) 不同日期数=$($dates.Count) 期望均=5")
+} catch { Test-Case 'D10 工具-本月不连续5天(恰好5条)' $false $_.Exception.Message }
+
+# ---- D11 计划内容针对性（复现"通用模板无意义"反馈） ----
+# 用户原话同构："帮我安排一个1到5天的MySQL学习计划" → 任务标题应是 MySQL 具体知识点而非通用套话
+try {
+    Clear-Calendar | Out-Null
+    $json = '{"sessionId":' + $sid + ',"message":"帮我安排一个1到5天的MySQL学习计划"}'
+    $r = Post-Json "$BASE/api/chat" $json $script:H
+    $c = [string]$r.data.content
+    $evs = Get-WithAuth "$BASE/api/calendar?month=2026-09" $script:H
+    $all = @($evs.data)
+    $dates = @($all | ForEach-Object { [string]$_.eventDate } | Sort-Object -Unique)
+    $specific = @($all | Where-Object { $_.title -match 'SQL|MySQL|索引|事务|查询|数据库|建表|备份|优化' })
+    $countOk = ($all.Count -ge 1) -and ($all.Count -le 5) -and ($dates.Count -eq $all.Count)
+    $contentOk = ($specific.Count -ge 3)
+    Test-Case 'D11 计划内容-Mysql具体知识点(非通用套话)' ($countOk -and $contentOk) ("事件数=$($all.Count) 具体知识点标题数=$($specific.Count) 期望: 1~5条各不同日期且>=3条含MySQL关键词")
+} catch { Test-Case 'D11 计划内容-Mysql具体知识点(非通用套话)' $false $_.Exception.Message }
+
+# ---- D12 评审Agent R4 内容质量提示（无科目模糊请求 → 回答应如实说明"通用框架"） ----
+try {
+    Clear-Calendar | Out-Null
+    $json = '{"sessionId":' + $sid + ',"message":"帮我随便生成一个学习计划吧"}'
+    $r = Post-Json "$BASE/api/chat" $json $script:H
+    $c = [string]$r.data.content
+    $honest = ($c -match '通用|框架')
+    Test-Case 'D12 评审Agent-内容质量提示(无科目时如实说明通用框架)' $honest ("回复len=$($c.Length) 含'通用/框架'说明=$honest")
+} catch { Test-Case 'D12 评审Agent-内容质量提示(无科目时如实说明通用框架)' $false $_.Exception.Message }
+
 # ---- C4/C5/C6 流式 ----
 try {
     $json = '{"sessionId":' + $sid + ',"message":"帮我总结一下今天的复习重点"}'
